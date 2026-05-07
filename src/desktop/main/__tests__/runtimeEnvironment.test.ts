@@ -24,6 +24,20 @@ describe("desktop runtime environment", () => {
     );
   });
 
+  it("does not export the hook server port through the generic PORT environment variable", () => {
+    const source = readFileSync(path.join(process.cwd(), "electron", "main.js"), "utf8");
+
+    expect(source).not.toContain("process.env.PORT");
+    expect(source).toContain("createHookServer({ host: HOOK_SERVER_HOST, port: HOOK_SERVER_PORT })");
+    expect(source).toContain("setHookServerPort(HOOK_SERVER_PORT)");
+  });
+
+  it("does not inject NODE_ENV into the desktop runtime environment", () => {
+    const source = readFileSync(path.join(process.cwd(), "electron", "main.js"), "utf8");
+
+    expect(source).not.toContain("process.env.NODE_ENV");
+  });
+
   it("uses port 19736 for hook server in desktop dev mode", () => {
     const source = readFileSync(path.join(process.cwd(), "electron", "main.js"), "utf8");
 
