@@ -338,6 +338,7 @@ describe("TaskDetailRoute", () => {
 
     // Then
     expect(screen.queryByText("Loading...")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "info" }));
     expect(screen.getByTestId("task-title").textContent).toBe("cached task title");
 
     deferredTask.resolve({
@@ -442,6 +443,188 @@ describe("TaskDetailRoute", () => {
     render(<TaskDetailRoute />);
 
     expect(screen.queryByText("sidebar hint visible")).toBeNull();
+  });
+
+  it("stale cache가 펼침 상태여도 현재 설정이 기본 접기면 작업 정보 패널을 자동으로 열지 않는다", async () => {
+    sessionStorage.setItem(TASK_DETAIL_CACHE_KEY, JSON.stringify({
+      task: {
+        id: "task-1",
+        title: "cached task title",
+        description: null,
+        branchName: "feat/cached",
+        baseBranch: "main",
+        prUrl: null,
+        sessionType: null,
+        sessionName: null,
+        sshHost: null,
+        projectId: "project-1",
+        project: { id: "project-1", name: "kanvibe" },
+        status: "todo",
+        agentType: null,
+        worktreePath: "/repo__worktrees/cached",
+      },
+      baseBranchTaskId: null,
+      diffFiles: [],
+      claudeHooksStatus: null,
+      geminiHooksStatus: null,
+      codexHooksStatus: null,
+      openCodeHooksStatus: null,
+      aiSessions: {
+        isRemote: false,
+        targetPath: null,
+        repoPath: null,
+        sessions: [],
+        sources: [],
+      },
+      projects: [],
+      defaultSessionType: "tmux",
+      sidebarDefaultCollapsed: false,
+      doneAlertDismissed: false,
+    }));
+    mocks.getSidebarDefaultCollapsed.mockResolvedValue(true);
+    mocks.getTaskById.mockReturnValue(new Promise(() => {}));
+
+    render(<TaskDetailRoute />);
+
+    await screen.findByRole("button", { name: "info" });
+
+    expect(screen.queryByTestId("task-title")).toBeNull();
+    expect(screen.queryByTestId("task-info")).toBeNull();
+  });
+
+  it("캐시가 있어도 현재 설정이 기본 펼침이고 사용자가 닫지 않았으면 작업 정보 패널을 자동으로 연다", async () => {
+    sessionStorage.setItem(TASK_DETAIL_CACHE_KEY, JSON.stringify({
+      task: {
+        id: "task-1",
+        title: "cached task title",
+        description: null,
+        branchName: "feat/cached",
+        baseBranch: "main",
+        prUrl: null,
+        sessionType: null,
+        sessionName: null,
+        sshHost: null,
+        projectId: "project-1",
+        project: { id: "project-1", name: "kanvibe" },
+        status: "todo",
+        agentType: null,
+        worktreePath: "/repo__worktrees/cached",
+      },
+      baseBranchTaskId: null,
+      diffFiles: [],
+      claudeHooksStatus: null,
+      geminiHooksStatus: null,
+      codexHooksStatus: null,
+      openCodeHooksStatus: null,
+      aiSessions: {
+        isRemote: false,
+        targetPath: null,
+        repoPath: null,
+        sessions: [],
+        sources: [],
+      },
+      projects: [],
+      defaultSessionType: "tmux",
+      sidebarDefaultCollapsed: true,
+      defaultPanelDismissed: false,
+      doneAlertDismissed: false,
+    }));
+    mocks.getSidebarDefaultCollapsed.mockResolvedValue(false);
+    mocks.getTaskById.mockResolvedValue({
+      id: "task-1",
+      title: "fresh task title",
+      description: null,
+      branchName: "feat/fresh",
+      baseBranch: "main",
+      prUrl: null,
+      sessionType: null,
+      sessionName: null,
+      sshHost: null,
+      projectId: "project-1",
+      project: { id: "project-1", name: "kanvibe" },
+      status: "todo",
+      agentType: null,
+      worktreePath: "/repo__worktrees/fresh",
+    });
+
+    render(<TaskDetailRoute />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-title").textContent).toBe("fresh task title");
+    });
+  });
+
+  it("작업 정보 패널을 닫아도 상세 데이터를 다시 조회하지 않는다", async () => {
+    mocks.getTaskById.mockResolvedValue({
+      id: "task-1",
+      title: "task title",
+      description: null,
+      branchName: "feat/detail-dismiss",
+      baseBranch: "main",
+      prUrl: null,
+      sessionType: "tmux",
+      sessionName: "task-session",
+      sshHost: null,
+      projectId: "project-1",
+      project: { id: "project-1", name: "kanvibe" },
+      status: "todo",
+      agentType: null,
+      worktreePath: "/repo__worktrees/detail-dismiss",
+    });
+
+    render(<TaskDetailRoute />);
+
+    await screen.findByTestId("task-title");
+    const taskLoadCountBeforeClose = mocks.getTaskById.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "close" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("task-title")).toBeNull();
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    expect(mocks.getTaskById).toHaveBeenCalledTimes(taskLoadCountBeforeClose);
+  });
+
+  it("사용자가 작업 정보 패널을 닫은 뒤 상세 데이터가 새로고침되어도 다시 열지 않는다", async () => {
+    let refreshSignal = 0;
+    mocks.useRefreshSignal.mockImplementation(() => refreshSignal);
+    mocks.getTaskById.mockResolvedValue({
+      id: "task-1",
+      title: "task title",
+      description: null,
+      branchName: "feat/detail-refresh",
+      baseBranch: "main",
+      prUrl: null,
+      sessionType: "tmux",
+      sessionName: "task-session",
+      sshHost: null,
+      projectId: "project-1",
+      project: { id: "project-1", name: "kanvibe" },
+      status: "todo",
+      agentType: null,
+      worktreePath: "/repo__worktrees/detail-refresh",
+    });
+
+    const { rerender } = render(<TaskDetailRoute />);
+
+    await screen.findByTestId("task-title");
+
+    fireEvent.click(screen.getByRole("button", { name: "close" }));
+
+    expect(screen.queryByTestId("task-title")).toBeNull();
+
+    refreshSignal = 1;
+    rerender(<TaskDetailRoute />);
+
+    await waitFor(() => {
+      expect(mocks.getTaskById.mock.calls.length).toBeGreaterThan(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("task-title")).toBeNull();
+    });
   });
 
   it("아이콘 버튼으로 상세 overview 패널을 열고 닫을 수 있다", async () => {
