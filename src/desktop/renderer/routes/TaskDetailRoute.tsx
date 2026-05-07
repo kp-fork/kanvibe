@@ -145,6 +145,15 @@ interface TaskDetailState {
   doneAlertDismissed: boolean;
 }
 
+interface TaskDetailRouteCache extends TaskDetailState {
+  defaultPanelDismissed?: boolean;
+}
+
+interface NormalizedTaskDetailRouteCache {
+  state: TaskDetailState;
+  defaultPanelDismissed: boolean;
+}
+
 const EMPTY_AI_SESSIONS: Awaited<ReturnType<typeof getTaskAiSessions>> = {
   isRemote: false,
   targetPath: null,
@@ -171,19 +180,24 @@ function getTaskDetailRouteCacheKey(taskId: string) {
   return buildRouteCacheKey("task-detail", taskId);
 }
 
-function normalizeCachedTaskDetailState(cachedState: TaskDetailState | null): TaskDetailState | null {
-  if (!cachedState) {
+function normalizeCachedTaskDetailRouteCache(cachedRoute: TaskDetailRouteCache | null): NormalizedTaskDetailRouteCache | null {
+  if (!cachedRoute) {
     return null;
   }
 
-  const routeState = { ...cachedState } as TaskDetailState & {
+  const routeState = { ...cachedRoute } as TaskDetailRouteCache & {
     sidebarHintDismissed?: boolean;
   };
+  const defaultPanelDismissed = routeState.defaultPanelDismissed === true;
   delete routeState.sidebarHintDismissed;
+  delete routeState.defaultPanelDismissed;
   return {
-    ...DEFAULT_DETAIL_STATE,
-    ...routeState,
-    sidebarDefaultCollapsed: routeState.sidebarDefaultCollapsed ?? DEFAULT_DETAIL_STATE.sidebarDefaultCollapsed,
+    state: {
+      ...DEFAULT_DETAIL_STATE,
+      ...routeState,
+      sidebarDefaultCollapsed: routeState.sidebarDefaultCollapsed ?? DEFAULT_DETAIL_STATE.sidebarDefaultCollapsed,
+    },
+    defaultPanelDismissed,
   };
 }
 
@@ -308,10 +322,11 @@ export default function TaskDetailRoute() {
   const t = useTranslations("taskDetail");
   const tc = useTranslations("common");
   const refreshSignal = useRefreshSignal(["all", "task-detail"]);
-  const cachedState = useMemo(
-    () => (id ? normalizeCachedTaskDetailState(readRouteCache<TaskDetailState>(getTaskDetailRouteCacheKey(id))) : null),
+  const cachedRoute = useMemo(
+    () => (id ? normalizeCachedTaskDetailRouteCache(readRouteCache<TaskDetailRouteCache>(getTaskDetailRouteCacheKey(id))) : null),
     [id],
   );
+  const cachedState = cachedRoute?.state ?? null;
   const [state, setState] = useState<TaskDetailState | null | undefined>(cachedState ?? undefined);
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
   const [createTaskDefaults, setCreateTaskDefaults] = useState<BranchTodoDefaults | null>(null);
@@ -320,31 +335,49 @@ export default function TaskDetailRoute() {
     const isMacDesktop = navigator.userAgent.includes("Mac") || navigator.platform.toLowerCase().includes("mac");
     return isDesktopApp && isMacDesktop;
   }, []);
-  const [activePanel, setActivePanel] = useState<DetailPanel | null>(
-    cachedState && !cachedState.sidebarDefaultCollapsed ? "overview" : null,
-  );
+  const [defaultPanelDismissed, setDefaultPanelDismissed] = useState(cachedRoute?.defaultPanelDismissed ?? false);
+  const [resolvedSidebarDefaultCollapsed, setResolvedSidebarDefaultCollapsed] = useState<boolean | null>(null);
+  const [activePanel, setActivePanel] = useState<DetailPanel | null>(null);
   const [mainView, setMainView] = useState<MainView>("terminal");
   const notificationCenterRef = useRef<NotificationCenterButtonHandle>(null);
   const currentTaskIdRef = useRef(id);
+  const commonTranslationsRef = useRef(tc);
   const hasTerminal = !!(state?.task.sessionType && state.task.sessionName);
   const shortcutPlatform = getCurrentShortcutPlatform();
   const statusPanelLabel = `${t("actions")} · ${t("hooksStatus")}`;
+  const shouldShowDefaultOverviewPanel = !!state
+    && state !== null
+    && resolvedSidebarDefaultCollapsed === false
+    && !defaultPanelDismissed;
+  const visiblePanel = activePanel ?? (shouldShowDefaultOverviewPanel ? "overview" : null);
+
+  const markDefaultPanelDismissed = useCallback(() => {
+    setDefaultPanelDismissed(true);
+  }, []);
+
+  const closeDetailPanel = useCallback(() => {
+    markDefaultPanelDismissed();
+    setActivePanel(null);
+    requestActiveTerminalFocusAfterUiSettles();
+  }, [markDefaultPanelDismissed]);
 
   const toggleDetailPanel = useCallback((panel: DetailPanel) => {
-    setActivePanel((current) => current === panel ? null : panel);
-  }, []);
+    markDefaultPanelDismissed();
+    setActivePanel(visiblePanel === panel ? null : panel);
+  }, [markDefaultPanelDismissed, visiblePanel]);
 
   const toggleChatView = useCallback(() => {
     setMainView((current) => {
       const nextView = current === "chat" ? "terminal" : "chat";
       if (nextView === "chat") {
+        markDefaultPanelDismissed();
         setActivePanel(null);
       } else {
         requestActiveTerminalFocusAfterUiSettles();
       }
       return nextView;
     });
-  }, []);
+  }, [markDefaultPanelDismissed]);
 
   const dockItems = useMemo<TaskDetailDockItem[]>(() => {
     if (!state) {
@@ -355,7 +388,7 @@ export default function TaskDetailRoute() {
       {
         id: "overview",
         label: t("info"),
-        isActive: activePanel === "overview",
+        isActive: visiblePanel === "overview",
         renderIcon: () => (
           <HugeiconsIcon
             icon={InformationCircleIcon}
@@ -369,7 +402,7 @@ export default function TaskDetailRoute() {
       {
         id: "status",
         label: statusPanelLabel,
-        isActive: activePanel === "status",
+        isActive: visiblePanel === "status",
         renderIcon: () => <AntennaSignalIcon testId="task-status-panel-icon" />,
         onActivate: () => toggleDetailPanel("status"),
       },
@@ -403,7 +436,7 @@ export default function TaskDetailRoute() {
     }
 
     return items;
-  }, [activePanel, mainView, state, statusPanelLabel, t, toggleChatView, toggleDetailPanel]);
+  }, [mainView, state, statusPanelLabel, t, toggleChatView, toggleDetailPanel, visiblePanel]);
 
   const activateDockItem = useCallback((shortcutIndex: number) => {
     if (!Number.isInteger(shortcutIndex)) {
@@ -444,6 +477,10 @@ export default function TaskDetailRoute() {
       setIsCreateTaskModalOpen(true);
     },
   }), [boardCommands, state?.task.baseBranch, state?.task.branchName, state?.task.projectId]);
+
+  useEffect(() => {
+    commonTranslationsRef.current = tc;
+  }, [tc]);
 
   useEffect(() => {
     function consumeHistoryShortcut(event: KeyboardEvent) {
@@ -517,14 +554,17 @@ export default function TaskDetailRoute() {
       }
 
       setState(cachedState ?? undefined);
-      setActivePanel(cachedState && !cachedState.sidebarDefaultCollapsed ? "overview" : null);
+      const nextDefaultPanelDismissed = cachedRoute?.defaultPanelDismissed ?? false;
+      setDefaultPanelDismissed(nextDefaultPanelDismissed);
+      setResolvedSidebarDefaultCollapsed(null);
+      setActivePanel(null);
       setMainView("terminal");
     });
 
     return () => {
       cancelled = true;
     };
-  }, [cachedState, id]);
+  }, [cachedRoute, cachedState, id]);
 
   useEffect(() => {
     if (!state || state === null) {
@@ -554,9 +594,12 @@ export default function TaskDetailRoute() {
     }
 
     if (state !== undefined) {
-      writeRouteCache(cacheKey, state);
+      writeRouteCache<TaskDetailRouteCache>(cacheKey, {
+        ...state,
+        defaultPanelDismissed,
+      });
     }
-  }, [id, state]);
+  }, [defaultPanelDismissed, id, state]);
 
   useEffect(() => {
     let cancelled = false;
@@ -596,9 +639,11 @@ export default function TaskDetailRoute() {
           return;
         }
 
+        setResolvedSidebarDefaultCollapsed(sidebarDefaultCollapsed);
         setState((current) => current && current.task.id === task.id
           ? {
               ...current,
+              sidebarDefaultCollapsed,
               task: {
                 ...current.task,
                 ...task,
@@ -609,14 +654,11 @@ export default function TaskDetailRoute() {
               ...DEFAULT_DETAIL_STATE,
               sidebarDefaultCollapsed,
             });
-        if (!cachedState && !sidebarDefaultCollapsed) {
-          setActivePanel("overview");
-        }
 
         if (task.branchName && !task.prUrl) {
           void (async () => {
             try {
-              const prUrl = await fetchPrUrlWithPrompt(task, tc);
+              const prUrl = await fetchPrUrlWithPrompt(task, commonTranslationsRef.current);
               if (!prUrl || cancelled) {
                 return;
               }
@@ -714,7 +756,7 @@ export default function TaskDetailRoute() {
       cancelled = true;
       clearLoadingTimeout();
     };
-  }, [cachedState, id, refreshSignal, tc]);
+  }, [id, refreshSignal]);
 
   const agentTagStyle = useMemo(
     () => (state?.task.agentType ? AGENT_TAG_STYLES[state.task.agentType] ?? "bg-tag-neutral-bg text-tag-neutral-text" : null),
@@ -722,9 +764,8 @@ export default function TaskDetailRoute() {
   );
 
   useEscapeKey(() => {
-    setActivePanel(null);
-    requestActiveTerminalFocusAfterUiSettles();
-  }, { enabled: activePanel !== null });
+    closeDetailPanel();
+  }, { enabled: visiblePanel !== null });
 
   if (state === undefined) {
     return <div className="min-h-screen flex items-center justify-center bg-bg-page text-text-muted">Loading...</div>;
@@ -832,21 +873,18 @@ export default function TaskDetailRoute() {
         <div className="mt-auto" />
       </aside>
 
-      {activePanel ? (
+      {visiblePanel ? (
         <section
           className={`absolute bottom-3 left-[4.5rem] top-3 z-30 w-[360px] max-w-[calc(100vw-5.5rem)] overflow-y-auto rounded-lg border border-border-default bg-bg-surface/95 p-3 shadow-lg ${needsMacDesktopHeaderOffset ? "pt-10" : ""}`}
         >
           <div className="mb-3 flex items-center justify-between border-b border-border-subtle pb-2">
             <h2 className="text-xs font-semibold uppercase text-text-muted">
-              {activePanel === "overview" && t("info")}
-              {activePanel === "status" && statusPanelLabel}
+              {visiblePanel === "overview" && t("info")}
+              {visiblePanel === "status" && statusPanelLabel}
             </h2>
             <button
               type="button"
-              onClick={() => {
-                setActivePanel(null);
-                requestActiveTerminalFocusAfterUiSettles();
-              }}
+              onClick={closeDetailPanel}
               className="rounded-md p-1 text-text-muted transition-colors hover:bg-bg-page hover:text-text-primary"
               aria-label={tc("close")}
             >
@@ -854,7 +892,7 @@ export default function TaskDetailRoute() {
             </button>
           </div>
 
-          {activePanel === "overview" ? (
+          {visiblePanel === "overview" ? (
             <div className="space-y-3">
               <TaskDetailTitleCard task={state.task} taskId={state.task.id} />
               <TaskDetailInfoCard
@@ -866,7 +904,7 @@ export default function TaskDetailRoute() {
             </div>
           ) : null}
 
-          {activePanel === "status" ? (
+          {visiblePanel === "status" ? (
             <div className="space-y-3">
               <div className="rounded-lg border border-border-default bg-bg-surface p-4">
                 <div className="flex flex-wrap gap-2">
@@ -932,9 +970,8 @@ export default function TaskDetailRoute() {
             <div
               className="flex-1 min-h-0 bg-terminal-bg"
               onClick={() => {
-                if (activePanel !== null) {
-                  setActivePanel(null);
-                  requestActiveTerminalFocusAfterUiSettles();
+                if (visiblePanel !== null) {
+                  closeDetailPanel();
                 }
               }}
             >
