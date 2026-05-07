@@ -266,15 +266,10 @@ function ensureRuntimeEnvironment() {
   ensureMacLocalCommandPath();
   process.env.KANVIBE_DESKTOP = "true";
   process.env.KANVIBE_HOST = HOOK_SERVER_HOST;
-  process.env.PORT = String(HOOK_SERVER_PORT);
   process.env.KANVIBE_APP_DATA_DIR = app.getPath("userData");
   process.env.KANVIBE_SEED_DB_PATH = app.isPackaged
     ? path.join(process.resourcesPath, "database", "app.seed.db")
     : path.join(appRoot, "resources", "database", "app.seed.db");
-
-  if (!process.env.NODE_ENV) {
-    process.env.NODE_ENV = app.isPackaged ? "production" : "development";
-  }
 }
 
 function getRendererEntryPath() {
