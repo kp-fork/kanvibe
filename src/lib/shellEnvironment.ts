@@ -20,6 +20,30 @@ function getUserLocalCommandPaths(homeDirectory: string): string[] {
   ];
 }
 
+const BLOCKED_LOCAL_SHELL_ENV_KEYS = new Set([
+  "PORT",
+  "HOST",
+  "NODE_ENV",
+]);
+
+function shouldIncludeLocalShellEnvironmentKey(key: string): boolean {
+  return !BLOCKED_LOCAL_SHELL_ENV_KEYS.has(key) && !key.startsWith("KANVIBE_");
+}
+
+function createSanitizedProcessEnvironment(): Record<string, string> {
+  const environment: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || !shouldIncludeLocalShellEnvironmentKey(key)) {
+      continue;
+    }
+
+    environment[key] = value;
+  }
+
+  return environment;
+}
+
 export function mergeShellPathEntries(pathValues: Array<string | undefined>): string {
   const pathEntries = pathValues
     .flatMap((pathValue) => (pathValue ?? "").split(path.delimiter))
@@ -36,9 +60,10 @@ export function createLocalShellEnvironment(): Record<string, string> {
     : "";
 
   return {
-    ...process.env,
+    ...createSanitizedProcessEnvironment(),
+    HOME: homeDirectory,
     PATH: mergeShellPathEntries([process.env.PATH, extraPath]),
     LANG: process.env.LANG || "en_US.UTF-8",
     LC_ALL: process.env.LC_ALL || "en_US.UTF-8",
-  } as Record<string, string>;
+  };
 }

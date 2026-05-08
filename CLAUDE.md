@@ -4,9 +4,13 @@
 
 - Avoid writing code that mutates generic process or server environment variables, because Electron main, hook servers, shells, tmux, zellij, and spawned child processes can inherit those values.
 - Do not set generic environment variables such as `PORT`, `NODE_ENV`, `HOST`, `PATH`, `HOME`, or similar process-wide defaults to express KanVibe runtime state.
+- Treat `PORT`, `HOST`, `NODE_ENV`, `PATH`, `HOME`, and `KANVIBE_*` as examples, not the full boundary. Do not introduce behavior that can affect the overall process-wide, user-wide, shell-wide, tmux-wide, zellij-wide, or agent-wide environment.
+- Avoid global environment side effects such as mutating `process.env` for runtime wiring, writing shell startup files, exporting variables into interactive sessions, changing global package-manager or OS environment config, or forwarding server/runtime environments wholesale.
 - Prefer explicit function arguments, typed configuration objects, or module-local state for runtime wiring such as server ports, hosts, feature flags, and mode selection.
 - If an environment variable is truly required, use a KanVibe-scoped name such as `KANVIBE_*`, document why it must be process-wide, and keep it out of user shell environments unless shell inheritance is the intended behavior.
 - When constructing child process, PTY, shell, tmux, or zellij environments, start from the narrowest required environment and avoid blindly leaking server-only runtime values into interactive sessions.
+- Route local child process and terminal environment creation through `createLocalShellEnvironment()` so `PORT`, `HOST`, `NODE_ENV`, and KanVibe internal `KANVIBE_*` values are stripped before user-visible shells run.
+- When changing terminal or child process environment handling, add focused tests that assert server/runtime variables do not appear in task terminal environments.
 
 ## App-Wide UI Settings
 
