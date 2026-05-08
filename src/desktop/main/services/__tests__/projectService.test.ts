@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   aggregateAiSessions: vi.fn(),
   getAiSessionDetail: vi.fn(),
   installKanvibeHooks: vi.fn(),
+  installKanvibeHookProvider: vi.fn(),
   scheduleKanvibeHooksInstall: vi.fn(),
   broadcastBoardUpdate: vi.fn(),
 }));
@@ -131,6 +132,7 @@ vi.mock("@/lib/remoteSessionDependency", () => ({
 
 vi.mock("@/lib/kanvibeHooksInstaller", () => ({
   installKanvibeHooks: mocks.installKanvibeHooks,
+  installKanvibeHookProvider: mocks.installKanvibeHookProvider,
   scheduleKanvibeHooksInstall: mocks.scheduleKanvibeHooksInstall,
 }));
 
@@ -421,7 +423,7 @@ describe("projectService local hook installation", () => {
     mocks.getOpenCodeHooksStatus.mockResolvedValue({ installed: false });
   });
 
-  it("로컬 Claude hook 설치 시 공통 installer로 모든 hooks를 다시 설치한다", async () => {
+  it("로컬 Claude hook 설치 시 Claude provider만 다시 설치한다", async () => {
     const task = {
       id: "task-1",
       worktreePath: "/workspace/task-1",
@@ -441,15 +443,17 @@ describe("projectService local hook installation", () => {
 
     await installTaskHooks(task.id);
 
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledWith(
       "/workspace/task-1",
       "task-1",
+      "claude",
       null,
     );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.setupClaudeHooks).not.toHaveBeenCalled();
   });
 
-  it("로컬 OpenCode hook 설치 시 공통 installer로 모든 hooks를 다시 설치한다", async () => {
+  it("로컬 OpenCode hook 설치 시 OpenCode provider만 다시 설치한다", async () => {
     const task = {
       id: "task-2",
       worktreePath: null,
@@ -478,11 +482,13 @@ describe("projectService local hook installation", () => {
 
     await installTaskOpenCodeHooks(task.id);
 
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledWith(
       "/workspace/repo",
       "task-main",
+      "openCode",
       null,
     );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.setupOpenCodeHooks).not.toHaveBeenCalled();
   });
 
@@ -522,7 +528,7 @@ describe("projectService local hook installation", () => {
     );
   });
 
-  it("프로젝트 루트 경로 task에서 Claude hook 재설치를 누르면 공통 installer로 현재 root task에 다시 바인딩한다", async () => {
+  it("프로젝트 루트 경로 task에서 Claude hook 재설치를 누르면 Claude provider만 현재 root task에 다시 바인딩한다", async () => {
     const task = {
       id: "stale-task",
       worktreePath: "/workspace/repo",
@@ -551,11 +557,13 @@ describe("projectService local hook installation", () => {
 
     await installTaskHooks(task.id);
 
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledWith(
       "/workspace/repo",
       "task-main",
+      "claude",
       null,
     );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.setupClaudeHooks).not.toHaveBeenCalled();
   });
 
@@ -839,11 +847,13 @@ describe("projectService local hook installation", () => {
       status: { installed: true },
     });
 
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledWith(
       "/workspace/api",
       "task-main",
+      "claude",
       null,
     );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.setupClaudeHooks).not.toHaveBeenCalled();
   });
 
@@ -1595,7 +1605,7 @@ describe("projectService remote hook and AI session support", () => {
     expect(findOneBy).not.toHaveBeenCalled();
   });
 
-  it("원격 태스크에서 hook 재설치를 누르면 공통 installer를 다시 실행한다", async () => {
+  it("원격 태스크에서 hook 재설치를 누르면 해당 provider만 다시 실행한다", async () => {
     // Given
     const task = {
       id: "task-remote",
@@ -1618,11 +1628,13 @@ describe("projectService remote hook and AI session support", () => {
     await installTaskHooks(task.id);
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledWith(
       "/remote/worktree",
       "task-remote",
+      "claude",
       "remote-host",
     );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
   });
 
   it("원격 repo root에서 실행 중인 비기본 브랜치 task는 현재 taskId로 hook을 재설치한다", async () => {
@@ -1660,8 +1672,12 @@ describe("projectService remote hook and AI session support", () => {
     await installTaskCodexHooks(task.id);
     await installTaskOpenCodeHooks(task.id);
 
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledTimes(4);
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith("/remote/repo", "task-remote", "remote-host");
+    expect(mocks.installKanvibeHookProvider).toHaveBeenCalledTimes(4);
+    expect(mocks.installKanvibeHookProvider).toHaveBeenNthCalledWith(1, "/remote/repo", "task-remote", "claude", "remote-host");
+    expect(mocks.installKanvibeHookProvider).toHaveBeenNthCalledWith(2, "/remote/repo", "task-remote", "gemini", "remote-host");
+    expect(mocks.installKanvibeHookProvider).toHaveBeenNthCalledWith(3, "/remote/repo", "task-remote", "codex", "remote-host");
+    expect(mocks.installKanvibeHookProvider).toHaveBeenNthCalledWith(4, "/remote/repo", "task-remote", "openCode", "remote-host");
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
   });
 
   it("원격 AI 세션 집계에도 sshHost를 전달한다", async () => {

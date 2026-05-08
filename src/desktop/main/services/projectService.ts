@@ -16,7 +16,7 @@ import { computeProjectColor } from "@/lib/projectColor";
 import { broadcastBoardUpdate } from "@/lib/boardNotifier";
 import { getAvailableHosts as readAvailableHosts } from "@/lib/sshConfig";
 import { getDefaultSessionType } from "@/desktop/main/services/appSettingsService";
-import { installKanvibeHooks, scheduleKanvibeHooksInstall } from "@/lib/kanvibeHooksInstaller";
+import { installKanvibeHooks, installKanvibeHookProvider, scheduleKanvibeHooksInstall } from "@/lib/kanvibeHooksInstaller";
 
 function matchesTaskLocation(task: { worktreePath?: string | null; sshHost?: string | null }, expectedPath: string, sshHost?: string | null): boolean {
   return task.worktreePath === expectedPath && (task.sshHost || null) === (sshHost || null);
@@ -906,7 +906,7 @@ export async function installProjectHooks(
   if (!task) return { success: false, error: "기본 브랜치 태스크를 찾을 수 없습니다." };
 
   try {
-    await installKanvibeHooks(project.repoPath, task.id, project.sshHost);
+    await installKanvibeHookProvider(project.repoPath, task.id, "claude", project.sshHost);
     return { success: true, status: await getClaudeHooksStatus(project.repoPath, task.id, project.sshHost) };
   } catch (error) {
     return {
@@ -944,7 +944,7 @@ export async function installTaskHooks(
       return { success: false, error: "프로젝트를 찾을 수 없습니다." };
     }
 
-    await installKanvibeHooks(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost);
+    await installKanvibeHookProvider(hookTarget.targetPath, hookTarget.taskId, "claude", hookTarget.sshHost);
     return { success: true, status: await getClaudeHooksStatus(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost) };
   } catch (error) {
     return {
@@ -978,7 +978,7 @@ export async function installProjectGeminiHooks(
   if (!task) return { success: false, error: "기본 브랜치 태스크를 찾을 수 없습니다." };
 
   try {
-    await installKanvibeHooks(project.repoPath, task.id, project.sshHost);
+    await installKanvibeHookProvider(project.repoPath, task.id, "gemini", project.sshHost);
     return { success: true, status: await getGeminiHooksStatus(project.repoPath, task.id, project.sshHost) };
   } catch (error) {
     return {
@@ -1016,7 +1016,7 @@ export async function installTaskGeminiHooks(
       return { success: false, error: "프로젝트를 찾을 수 없습니다." };
     }
 
-    await installKanvibeHooks(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost);
+    await installKanvibeHookProvider(hookTarget.targetPath, hookTarget.taskId, "gemini", hookTarget.sshHost);
     return { success: true, status: await getGeminiHooksStatus(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost) };
   } catch (error) {
     return {
@@ -1048,7 +1048,7 @@ export async function installProjectCodexHooks(
   if (!task) return { success: false, error: "기본 브랜치 태스크를 찾을 수 없습니다." };
 
   try {
-    await installKanvibeHooks(project.repoPath, task.id, project.sshHost);
+    await installKanvibeHookProvider(project.repoPath, task.id, "codex", project.sshHost);
     return { success: true, status: await getCodexHooksStatus(project.repoPath, task.id, project.sshHost) };
   } catch (error) {
     return {
@@ -1084,7 +1084,7 @@ export async function installTaskCodexHooks(
       return { success: false, error: "프로젝트를 찾을 수 없습니다." };
     }
 
-    await installKanvibeHooks(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost);
+    await installKanvibeHookProvider(hookTarget.targetPath, hookTarget.taskId, "codex", hookTarget.sshHost);
     return { success: true, status: await getCodexHooksStatus(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost) };
   } catch (error) {
     return {
@@ -1106,7 +1106,7 @@ export async function installProjectOpenCodeHooks(
   if (!task) return { success: false, error: "Default branch task not found" };
 
   try {
-    await installKanvibeHooks(project.repoPath, task.id, project.sshHost);
+    await installKanvibeHookProvider(project.repoPath, task.id, "openCode", project.sshHost);
     return { success: true, status: await getOpenCodeHooksStatus(project.repoPath, task.id, project.sshHost) };
   } catch (error) {
     return {
@@ -1133,7 +1133,7 @@ export async function installTaskOpenCodeHooks(
       return { success: false, error: "Task or project not found" };
     }
 
-    await installKanvibeHooks(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost);
+    await installKanvibeHookProvider(hookTarget.targetPath, hookTarget.taskId, "openCode", hookTarget.sshHost);
     return { success: true, status: await getOpenCodeHooksStatus(hookTarget.targetPath, hookTarget.taskId, hookTarget.sshHost) };
   } catch (error) {
     return {
