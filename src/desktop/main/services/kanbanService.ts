@@ -45,6 +45,7 @@ export interface SearchableTask {
 }
 
 const DONE_PAGE_SIZE = 20;
+const TERMINAL_HOOK_INSTALL_PRE_ATTACH_WAIT_MS = 1_500;
 const ACTIVE_PULL_TASK_STATUSES = [
   TaskStatus.TODO,
   TaskStatus.PROGRESS,
@@ -175,6 +176,41 @@ async function installTaskHookFilesSafely(
     scheduleTaskHookVerification(targetPath, task);
   } catch (error) {
     reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
+  }
+}
+
+async function installTaskHookFilesBeforeTerminalAttach(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+) {
+  const installJob = installTaskHookFilesSafely(
+    targetPath,
+    task,
+    "터미널 연결 전 hooks 동기 설치 실패",
+  );
+
+  const installResult = await waitForTerminalHookInstallPreAttach(installJob);
+  if (installResult === "timeout") {
+    void installJob;
+  }
+}
+
+async function waitForTerminalHookInstallPreAttach(
+  installJob: Promise<void>,
+): Promise<"completed" | "timeout"> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      installJob.then(() => "completed" as const),
+      new Promise<"timeout">((resolve) => {
+        timeoutId = setTimeout(() => resolve("timeout"), TERMINAL_HOOK_INSTALL_PRE_ATTACH_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -872,11 +908,11 @@ export async function connectTerminalSession(
   const workingDir = task.worktreePath || project.repoPath;
 
   try {
-    await installTaskHookFilesSafely(workingDir, {
+    await installTaskHookFilesBeforeTerminalAttach(workingDir, {
       id: task.id,
       title: task.title,
       sshHost: project.sshHost,
-    }, "터미널 연결 전 hooks 동기 설치 실패");
+    });
 
     const session = await createSessionWithoutWorktree(
       project.repoPath,

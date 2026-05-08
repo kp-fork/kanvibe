@@ -240,6 +240,88 @@ describe("kanvibeHooksInstaller", () => {
     expect(mockSetupOpenCodeHooks).not.toHaveBeenCalled();
   });
 
+  it("OpenCode 등록만 누락된 상태는 전체 hook 설치 실패로 처리하지 않는다", async () => {
+    // Given
+    mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+    mockGetOpenCodeHooksStatus.mockResolvedValue({
+      installed: false,
+      hasPlugin: true,
+      hasRegisteredPlugin: false,
+      hasTaskIdBinding: true,
+      hasExpectedTaskId: true,
+      hasStatusEndpoint: true,
+      hasEventMappings: true,
+      hasMainSessionGuard: true,
+      hasDuplicateProgressGuard: true,
+      hasExpectedHookServerUrl: true,
+    });
+
+    const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When & Then
+    await expect(installKanvibeHooks("/repo", "task-1", null)).resolves.toBeUndefined();
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(1);
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith("[hooks] OpenCode verification", expect.objectContaining({
+      failedChecks: ["hasRegisteredPlugin"],
+      installed: false,
+      targetPath: "/repo",
+    }));
+  });
+
+  it("OpenCode 단독 설치도 등록 누락만으로 실패하지 않는다", async () => {
+    // Given
+    mockGetOpenCodeHooksStatus.mockResolvedValue({
+      installed: false,
+      hasPlugin: true,
+      hasRegisteredPlugin: false,
+      hasTaskIdBinding: true,
+      hasExpectedTaskId: true,
+      hasStatusEndpoint: true,
+      hasEventMappings: true,
+      hasMainSessionGuard: true,
+      hasDuplicateProgressGuard: true,
+      hasExpectedHookServerUrl: true,
+    });
+
+    const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When & Then
+    await expect(installKanvibeHookProvider("/repo", "task-1", "openCode", null)).resolves.toBeUndefined();
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(1);
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("OpenCode 단독 설치는 plugin 파일 검증 실패를 전파한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      mockGetOpenCodeHooksStatus.mockResolvedValue({
+        installed: false,
+        hasPlugin: false,
+        hasRegisteredPlugin: false,
+      });
+
+      const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      const result = expect(installKanvibeHookProvider("/repo", "task-1", "openCode", null)).rejects.toThrow(
+        "hooks 검증 실패: OpenCode(hasPlugin)",
+      );
+      await vi.runAllTimersAsync();
+
+      // Then
+      await result;
+      expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(3);
+      expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("provider별 설치 실패는 다른 provider setup으로 재시도하지 않는다", async () => {
     vi.useFakeTimers();
 

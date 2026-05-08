@@ -26,6 +26,13 @@ import { quoteShellArgument, readTextFiles } from "@/lib/hostFileAccess";
 
 const HOOK_INSTALL_MAX_ATTEMPTS = 3;
 const HOOK_INSTALL_RETRY_DELAY_MS = 500;
+const NON_BLOCKING_HOOK_STATUS_CHECKS = new Set([
+  "hasReachableHookServer",
+  "hasDuplicateKanvibePlugins",
+]);
+const OPEN_CODE_NON_BLOCKING_INSTALL_CHECKS = new Set([
+  "hasRegisteredPlugin",
+]);
 const activeHookInstallJobs = new Map<string, Promise<void>>();
 const activeHookFileInstallJobs = new Map<string, Promise<void>>();
 const scheduledHookInstallJobs = new Map<string, ScheduledHookInstallJob>();
@@ -778,8 +785,9 @@ async function logHookVerificationStatuses(
     const provider = verifiers[index].provider;
     if (result.status === "fulfilled") {
       const failedChecks = logHookVerificationStatus(provider, result.value, targetPath, taskId, sshHost);
-      if (!result.value.installed) {
-        failures.push({ provider, failedChecks });
+      const fatalFailedChecks = getFatalHookVerificationFailedChecks(provider, result.value, failedChecks);
+      if (shouldFailHookVerification(result.value, failedChecks, fatalFailedChecks)) {
+        failures.push({ provider, failedChecks: fatalFailedChecks });
       }
       continue;
     }
@@ -806,7 +814,10 @@ async function logHookProviderVerificationStatus(
   try {
     const status = await installer.verify();
     const failedChecks = logHookVerificationStatus(installer.label, status, targetPath, taskId, sshHost);
-    return status.installed ? null : { provider: installer.label, failedChecks };
+    const fatalFailedChecks = getFatalHookVerificationFailedChecks(installer.label, status, failedChecks);
+    return shouldFailHookVerification(status, failedChecks, fatalFailedChecks)
+      ? { provider: installer.label, failedChecks: fatalFailedChecks }
+      : null;
   } catch (error) {
     console.warn(`[hooks] ${installer.label} verification unavailable`, {
       provider: installer.label,
@@ -854,8 +865,32 @@ function logHookVerificationStatus(
 function getHookVerificationFailedChecks(status: HookVerificationStatus): string[] {
   return Object.entries(status)
     .filter(([key, value]) => key.startsWith("has") && value === false)
-    .filter(([key]) => !(status.installed && key === "hasReachableHookServer"))
+    .filter(([key]) => !NON_BLOCKING_HOOK_STATUS_CHECKS.has(key))
     .map(([key]) => key);
+}
+
+function getFatalHookVerificationFailedChecks(
+  provider: string,
+  status: HookVerificationStatus,
+  failedChecks: string[],
+): string[] {
+  if (status.installed || provider !== "OpenCode") {
+    return failedChecks;
+  }
+
+  return failedChecks.filter((check) => !OPEN_CODE_NON_BLOCKING_INSTALL_CHECKS.has(check));
+}
+
+function shouldFailHookVerification(
+  status: HookVerificationStatus,
+  failedChecks: string[],
+  fatalFailedChecks: string[],
+): boolean {
+  if (status.installed) {
+    return false;
+  }
+
+  return fatalFailedChecks.length > 0 || failedChecks.length === 0;
 }
 
 function formatHookVerificationFailures(failures: HookVerificationFailure[]): string {

@@ -460,6 +460,94 @@ describe("kanbanService.createTask", () => {
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it("기존 브랜치 task 터미널 연결은 hooks 설치가 지연되어도 세션 생성을 계속한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      const task = {
+        id: "task-connect-slow-hooks",
+        title: "느린 hooks 연결",
+        projectId: "project-remote",
+        branchName: "feature/slow-hooks",
+        baseBranch: "main",
+        worktreePath: "/remote/repo__worktrees/feature-slow-hooks",
+        sshHost: "remote-host",
+        sessionType: null,
+        sessionName: null,
+        status: "todo",
+      };
+      mocks.taskRepo.findOneBy.mockResolvedValue(task);
+      mocks.projectRepo.findOneBy.mockResolvedValue({
+        id: "project-remote",
+        repoPath: "/remote/repo",
+        defaultBranch: "main",
+        sshHost: "remote-host",
+      });
+      let resolveInstall: () => void = () => {};
+      mocks.installKanvibeHookFiles.mockImplementation(() => new Promise<void>((resolve) => {
+        resolveInstall = resolve;
+      }));
+      mocks.createSessionWithoutWorktree.mockResolvedValue({
+        sessionName: "repo-feature-slow-hooks",
+      });
+      mocks.taskRepo.save.mockImplementation(async (value) => value);
+
+      const { connectTerminalSession } = await import("@/desktop/main/services/kanbanService");
+
+      // When
+      const resultPromise = connectTerminalSession("task-connect-slow-hooks", "tmux" as never);
+      for (let index = 0; index < 6; index += 1) {
+        await Promise.resolve();
+      }
+
+      // Then
+      expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
+        "/remote/repo__worktrees/feature-slow-hooks",
+        "task-connect-slow-hooks",
+        "remote-host",
+      );
+      expect(mocks.createSessionWithoutWorktree).not.toHaveBeenCalled();
+      expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const result = await resultPromise;
+
+      expect(result).toEqual(expect.objectContaining({
+        id: "task-connect-slow-hooks",
+        sessionType: "tmux",
+        sessionName: "repo-feature-slow-hooks",
+        status: "progress",
+      }));
+      expect(mocks.createSessionWithoutWorktree).toHaveBeenCalledWith(
+        "/remote/repo",
+        "feature/slow-hooks",
+        "tmux",
+        "remote-host",
+        "/remote/repo__worktrees/feature-slow-hooks",
+      );
+      expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
+      expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
+
+      resolveInstall();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+        "/remote/repo__worktrees/feature-slow-hooks",
+        "task-connect-slow-hooks",
+        "remote-host",
+        expect.objectContaining({
+          onSuccess: expect.any(Function),
+          onFailure: expect.any(Function),
+        }),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("기존 task에서 브랜치를 만들면 hooks 설치와 검증 예약 후 board update를 보낸다", async () => {
     // Given
     const task = {
