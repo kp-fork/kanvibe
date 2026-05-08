@@ -6,7 +6,7 @@ import { extractShellHookServerUrl, validateHookServerConfiguration } from "@/li
 import { buildShellTaskIdResolver, getShellTaskIdBindingStatus } from "@/lib/hookTaskBinding";
 
 /**
- * Codex CLI 최신 hooks 설정은 `.codex/config.toml`의 feature flag와
+ * Codex CLI 최신 hooks 설정은 `.codex/config.toml`의 hooks feature flag와
  * `.codex/hooks.json` 조합을 사용한다.
  */
 
@@ -175,22 +175,49 @@ export function upsertCodexConfigToml(configContent: string): string {
 
   if (!featuresSection) {
     const prefix = normalized.length > 0 ? `${normalized}\n\n` : "";
-    return `${prefix}[features]\ncodex_hooks = true\n`;
+    return `${prefix}[features]\ncodex_hooks = true\nhooks = true\n`;
   }
 
-  const flagIndex = lines.findIndex(
-    (line, index) => index > featuresSection.start
-      && index < featuresSection.end
-      && /^\s*codex_hooks\s*=/.test(line),
-  );
+  const beforeFeaturesBody = lines.slice(0, featuresSection.start + 1);
+  const featuresBody = lines.slice(featuresSection.start + 1, featuresSection.end);
+  const afterFeaturesSection = lines.slice(featuresSection.end);
+  const nextFeaturesBody: string[] = [];
+  let hasLegacyHooksFlag = false;
+  let hasHooksFlag = false;
 
-  if (flagIndex !== -1) {
-    lines[flagIndex] = "codex_hooks = true";
-  } else {
-    lines.splice(featuresSection.end, 0, "codex_hooks = true");
+  for (const line of featuresBody) {
+    if (/^\s*codex_hooks\s*=/.test(line)) {
+      if (!hasLegacyHooksFlag) {
+        nextFeaturesBody.push("codex_hooks = true");
+        hasLegacyHooksFlag = true;
+      }
+      continue;
+    }
+
+    if (/^\s*hooks\s*=/.test(line)) {
+      if (!hasHooksFlag) {
+        nextFeaturesBody.push("hooks = true");
+        hasHooksFlag = true;
+      }
+      continue;
+    }
+
+    nextFeaturesBody.push(line);
   }
 
-  return `${lines.join("\n").trimEnd()}\n`;
+  if (!hasLegacyHooksFlag) {
+    nextFeaturesBody.push("codex_hooks = true");
+  }
+
+  if (!hasHooksFlag) {
+    nextFeaturesBody.push("hooks = true");
+  }
+
+  return `${[
+    ...beforeFeaturesBody,
+    ...nextFeaturesBody,
+    ...afterFeaturesSection,
+  ].join("\n").trimEnd()}\n`;
 }
 
 function hasCodexFeatureFlag(configContent: string): boolean {
@@ -201,11 +228,17 @@ function hasCodexFeatureFlag(configContent: string): boolean {
     return false;
   }
 
-  return lines.some(
+  const hasLegacyHooksFlag = lines.some(
     (line, index) => index > featuresSection.start
       && index < featuresSection.end
       && /^\s*codex_hooks\s*=\s*true\s*$/.test(line),
   );
+  const hasHooksFlag = lines.some(
+    (line, index) => index > featuresSection.start
+      && index < featuresSection.end
+      && /^\s*hooks\s*=\s*true\s*$/.test(line),
+  );
+  return hasLegacyHooksFlag && hasHooksFlag;
 }
 
 export function upsertCodexHooksJson(hooksContent: string): string {
