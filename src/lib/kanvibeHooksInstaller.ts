@@ -306,7 +306,7 @@ async function installKanvibeHooksOnce(
     await setupRemoteKanvibeHooks(targetPath, taskId, hookServerUrl, sshHost);
   }
 
-  scheduleHookVerificationLog(targetPath, taskId, sshHost);
+  await verifyHookInstallation(targetPath, taskId, sshHost);
 }
 
 async function installKanvibeHookProviderOnce(
@@ -332,7 +332,7 @@ async function installKanvibeHookProviderOnce(
   }
 
   await installer.install();
-  scheduleHookProviderVerificationLog(installer, targetPath, taskId, sshHost);
+  await verifyHookProviderInstallation(installer, targetPath, taskId, sshHost);
 }
 
 async function setupRemoteClaudeHooks(repoPath: string, taskId: string, hookServerUrl: string, sshHost: string) {
@@ -652,37 +652,36 @@ function assertHookInstallResults(results: PromiseSettledResult<unknown>[], prov
 
 type HookVerificationStatus = ClaudeHooksStatus | GeminiHooksStatus | CodexHooksStatus | OpenCodeHooksStatus;
 
-function scheduleHookVerificationLog(targetPath: string, taskId: string, sshHost?: string | null) {
-  void logHookVerificationStatuses(targetPath, taskId, sshHost)
-    .catch((error) => {
-      console.warn("[hooks] verification logging failed", {
-        targetPath,
-        taskId,
-        sshHost: sshHost ?? null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+interface HookVerificationFailure {
+  provider: string;
+  failedChecks?: string[];
+  error?: unknown;
 }
 
-function scheduleHookProviderVerificationLog(
+async function verifyHookInstallation(targetPath: string, taskId: string, sshHost?: string | null) {
+  const failures = await logHookVerificationStatuses(targetPath, taskId, sshHost);
+  if (failures.length > 0) {
+    throw new Error(`hooks 검증 실패: ${formatHookVerificationFailures(failures)}`);
+  }
+}
+
+async function verifyHookProviderInstallation(
   installer: HookProviderInstaller,
   targetPath: string,
   taskId: string,
   sshHost?: string | null,
 ) {
-  void logHookProviderVerificationStatus(installer, targetPath, taskId, sshHost)
-    .catch((error) => {
-      console.warn(`[hooks] ${installer.label} verification logging failed`, {
-        provider: installer.label,
-        targetPath,
-        taskId,
-        sshHost: sshHost ?? null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  const failure = await logHookProviderVerificationStatus(installer, targetPath, taskId, sshHost);
+  if (failure) {
+    throw new Error(`hooks 검증 실패: ${formatHookVerificationFailures([failure])}`);
+  }
 }
 
-async function logHookVerificationStatuses(targetPath: string, taskId: string, sshHost?: string | null) {
+async function logHookVerificationStatuses(
+  targetPath: string,
+  taskId: string,
+  sshHost?: string | null,
+): Promise<HookVerificationFailure[]> {
   const verifiers = [
     { provider: "Claude", verify: getClaudeHooksStatus },
     { provider: "Gemini", verify: getGeminiHooksStatus },
@@ -691,10 +690,15 @@ async function logHookVerificationStatuses(targetPath: string, taskId: string, s
   ] as const;
 
   const results = await Promise.allSettled(verifiers.map(({ verify }) => verify(targetPath, taskId, sshHost)));
+  const failures: HookVerificationFailure[] = [];
+
   for (const [index, result] of results.entries()) {
     const provider = verifiers[index].provider;
     if (result.status === "fulfilled") {
-      logHookVerificationStatus(provider, result.value, targetPath, taskId, sshHost);
+      const failedChecks = logHookVerificationStatus(provider, result.value, targetPath, taskId, sshHost);
+      if (!result.value.installed) {
+        failures.push({ provider, failedChecks });
+      }
       continue;
     }
 
@@ -705,7 +709,10 @@ async function logHookVerificationStatuses(targetPath: string, taskId: string, s
       sshHost: sshHost ?? null,
       error: result.reason instanceof Error ? result.reason.message : String(result.reason),
     });
+    failures.push({ provider, error: result.reason });
   }
+
+  return failures;
 }
 
 async function logHookProviderVerificationStatus(
@@ -713,9 +720,11 @@ async function logHookProviderVerificationStatus(
   targetPath: string,
   taskId: string,
   sshHost?: string | null,
-) {
+): Promise<HookVerificationFailure | null> {
   try {
-    logHookVerificationStatus(installer.label, await installer.verify(), targetPath, taskId, sshHost);
+    const status = await installer.verify();
+    const failedChecks = logHookVerificationStatus(installer.label, status, targetPath, taskId, sshHost);
+    return status.installed ? null : { provider: installer.label, failedChecks };
   } catch (error) {
     console.warn(`[hooks] ${installer.label} verification unavailable`, {
       provider: installer.label,
@@ -724,6 +733,7 @@ async function logHookProviderVerificationStatus(
       sshHost: sshHost ?? null,
       error: error instanceof Error ? error.message : String(error),
     });
+    return { provider: installer.label, error };
   }
 }
 
@@ -733,12 +743,8 @@ function logHookVerificationStatus(
   targetPath: string,
   taskId: string,
   sshHost?: string | null,
-) {
-  const failedChecks = Object.entries(status)
-    .filter(([key, value]) => key.startsWith("has") && value === false)
-    .filter(([key]) => !(status.installed && key === "hasReachableHookServer"))
-    .map(([key]) => key);
-
+): string[] {
+  const failedChecks = getHookVerificationFailedChecks(status);
   const payload = {
     provider,
     targetPath,
@@ -756,8 +762,30 @@ function logHookVerificationStatus(
 
   if (status.installed) {
     console.log(`[hooks] ${provider} verification`, payload);
-    return;
+    return failedChecks;
   }
 
   console.warn(`[hooks] ${provider} verification`, payload);
+  return failedChecks;
+}
+
+function getHookVerificationFailedChecks(status: HookVerificationStatus): string[] {
+  return Object.entries(status)
+    .filter(([key, value]) => key.startsWith("has") && value === false)
+    .filter(([key]) => !(status.installed && key === "hasReachableHookServer"))
+    .map(([key]) => key);
+}
+
+function formatHookVerificationFailures(failures: HookVerificationFailure[]): string {
+  return failures.map(({ provider, failedChecks, error }) => {
+    if (error) {
+      return `${provider}(${error instanceof Error ? error.message : String(error)})`;
+    }
+
+    if (failedChecks && failedChecks.length > 0) {
+      return `${provider}(${failedChecks.join(", ")})`;
+    }
+
+    return provider;
+  }).join(", ");
 }

@@ -206,66 +206,54 @@ describe("kanbanService.createTask", () => {
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("원격 worktree 태스크 생성은 hooks 설치가 오래 걸리면 반환하고 완료 시 다시 갱신한다", async () => {
-    vi.useFakeTimers();
+  it("원격 worktree 태스크 생성은 hooks 설치 완료를 기다린 뒤 반환한다", async () => {
+    // Given
+    mocks.projectRepo.findOneBy.mockResolvedValue({
+      id: "project-1",
+      repoPath: "/remote/repo",
+      defaultBranch: "main",
+      sshHost: "remote-host",
+    });
+    mocks.createWorktreeWithSession.mockResolvedValue({
+      worktreePath: "/remote/repo-worktrees/task-1",
+      sessionName: "task-1",
+    });
+    let resolveInstall: () => void = () => {};
+    mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveInstall = resolve;
+    }));
+    mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
 
-    try {
-      // Given
-      mocks.projectRepo.findOneBy.mockResolvedValue({
-        id: "project-1",
-        repoPath: "/remote/repo",
-        defaultBranch: "main",
-        sshHost: "remote-host",
-      });
-      mocks.createWorktreeWithSession.mockResolvedValue({
-        worktreePath: "/remote/repo-worktrees/task-1",
-        sessionName: "task-1",
-      });
-      let resolveInstall: () => void = () => {};
-      mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
-        resolveInstall = resolve;
-      }));
-      mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
+    const { createTask } = await import("@/desktop/main/services/kanbanService");
 
-      const { createTask } = await import("@/desktop/main/services/kanbanService");
-
-      // When
-      let resolved = false;
-      const resultPromise = createTask({
-        title: "원격 hooks 보장",
-        branchName: "fix/remote-hooks",
-        projectId: "project-1",
-        sessionType: "tmux" as never,
-      }).then((result) => {
-        resolved = true;
-        return result;
-      });
-      for (let index = 0; index < 6; index += 1) {
-        await Promise.resolve();
-      }
-
-      // Then
-      expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
-        "/remote/repo-worktrees/task-1",
-        "task-1",
-        "remote-host",
-      );
-      expect(resolved).toBe(false);
-      expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1500);
-
-      await expect(resultPromise).resolves.toEqual(expect.objectContaining({ id: "task-1" }));
-      expect(resolved).toBe(true);
-      expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
-
-      resolveInstall();
+    // When
+    let resolved = false;
+    const resultPromise = createTask({
+      title: "원격 hooks 보장",
+      branchName: "fix/remote-hooks",
+      projectId: "project-1",
+      sessionType: "tmux" as never,
+    }).then((result) => {
+      resolved = true;
+      return result;
+    });
+    for (let index = 0; index < 6; index += 1) {
       await Promise.resolve();
-      expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
     }
+
+    // Then
+    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+      "/remote/repo-worktrees/task-1",
+      "task-1",
+      "remote-host",
+    );
+    expect(resolved).toBe(false);
+    expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+
+    resolveInstall();
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({ id: "task-1" }));
+    expect(resolved).toBe(true);
+    expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("동기 hooks 설치 실패는 실패 이벤트로 브로드캐스트하고 태스크는 반환한다", async () => {
@@ -339,62 +327,74 @@ describe("kanbanService.createTask", () => {
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("원격 기존 브랜치 task에 터미널을 연결하면 hooks 설치를 백그라운드로 예약한다", async () => {
-    vi.useFakeTimers();
+  it("원격 기존 브랜치 task에 터미널을 연결하면 hooks 설치 완료 후 세션을 생성한다", async () => {
+    // Given
+    const task = {
+      id: "task-connect",
+      title: "원격 브랜치 연결",
+      projectId: "project-remote",
+      branchName: "feature/remote",
+      baseBranch: "main",
+      worktreePath: "/remote/repo__worktrees/feature-remote",
+      sshHost: "remote-host",
+      sessionType: null,
+      sessionName: null,
+      status: "todo",
+    };
+    mocks.taskRepo.findOneBy.mockResolvedValue(task);
+    mocks.projectRepo.findOneBy.mockResolvedValue({
+      id: "project-remote",
+      repoPath: "/remote/repo",
+      defaultBranch: "main",
+      sshHost: "remote-host",
+    });
+    let resolveInstall: () => void = () => {};
+    mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveInstall = resolve;
+    }));
+    mocks.createSessionWithoutWorktree.mockResolvedValue({
+      sessionName: "repo-feature-remote",
+    });
+    mocks.taskRepo.save.mockImplementation(async (value) => value);
 
-    try {
-      // Given
-      const task = {
-        id: "task-connect",
-        title: "원격 브랜치 연결",
-        projectId: "project-remote",
-        branchName: "feature/remote",
-        baseBranch: "main",
-        worktreePath: "/remote/repo__worktrees/feature-remote",
-        sshHost: "remote-host",
-        sessionType: null,
-        sessionName: null,
-        status: "todo",
-      };
-      mocks.taskRepo.findOneBy.mockResolvedValue(task);
-      mocks.projectRepo.findOneBy.mockResolvedValue({
-        id: "project-remote",
-        repoPath: "/remote/repo",
-        defaultBranch: "main",
-        sshHost: "remote-host",
-      });
-      mocks.createSessionWithoutWorktree.mockResolvedValue({
-        sessionName: "repo-feature-remote",
-      });
-      mocks.taskRepo.save.mockImplementation(async (value) => value);
+    const { connectTerminalSession } = await import("@/desktop/main/services/kanbanService");
 
-      const { connectTerminalSession } = await import("@/desktop/main/services/kanbanService");
-
-      // When
-      const result = await connectTerminalSession("task-connect", "tmux" as never);
-
-      // Then
-      expect(result).toEqual(expect.objectContaining({
-        id: "task-connect",
-        sessionType: "tmux",
-        sessionName: "repo-feature-remote",
-        status: "progress",
-      }));
-      expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
-      expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
-
-      await vi.runAllTimersAsync();
-
-      expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
-        "/remote/repo__worktrees/feature-remote",
-        "task-connect",
-        "remote-host",
-      );
-      expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
+    // When
+    const resultPromise = connectTerminalSession("task-connect", "tmux" as never);
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
     }
+
+    // Then
+    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+      "/remote/repo__worktrees/feature-remote",
+      "task-connect",
+      "remote-host",
+    );
+    expect(mocks.createSessionWithoutWorktree).not.toHaveBeenCalled();
+    expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+
+    resolveInstall();
+    const result = await resultPromise;
+
+    expect(result).toEqual(expect.objectContaining({
+      id: "task-connect",
+      sessionType: "tmux",
+      sessionName: "repo-feature-remote",
+      status: "progress",
+    }));
+    expect(mocks.createSessionWithoutWorktree).toHaveBeenCalledWith(
+      "/remote/repo",
+      "feature/remote",
+      "tmux",
+      "remote-host",
+      "/remote/repo__worktrees/feature-remote",
+    );
+    expect(mocks.installKanvibeHooks.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.createSessionWithoutWorktree.mock.invocationCallOrder[0],
+    );
+    expect(mocks.scheduleKanvibeHooksInstall).not.toHaveBeenCalled();
+    expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("원격 stale task는 안전하지 않은 worktree/브랜치 삭제를 건너뛴다", async () => {

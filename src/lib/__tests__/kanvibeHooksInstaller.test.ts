@@ -410,7 +410,7 @@ describe("kanvibeHooksInstaller", () => {
   it("설치 후 provider별 검증 결과를 로그로 남긴다", async () => {
     mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
     mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
-    mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
     mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
 
     const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
@@ -426,14 +426,34 @@ describe("kanvibeHooksInstaller", () => {
       targetPath: "/repo",
       taskId: "task-1",
     }));
-    expect(console.warn).toHaveBeenCalledWith("[hooks] Codex verification", expect.objectContaining({
-      installed: false,
-      failedChecks: ["hasConfigEntry"],
-      targetPath: "/repo",
-    }));
   });
 
-  it("원격 설치는 SSH 기반 검증 로그를 기다리지 않고 반환한다", async () => {
+  it("검증에서 미설치 provider가 있으면 설치 실패로 재시도 후 전파한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+
+      const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
+
+      const result = expect(installKanvibeHooks("/repo", "task-1", null)).rejects.toThrow(
+        "hooks 검증 실패: Codex(hasConfigEntry)",
+      );
+      await vi.runAllTimersAsync();
+
+      await result;
+      expect(mockGetCodexHooksStatus).toHaveBeenCalledTimes(3);
+      expect(console.warn).toHaveBeenCalledWith("[hooks] Codex verification", expect.objectContaining({
+        installed: false,
+        failedChecks: ["hasConfigEntry"],
+        targetPath: "/repo",
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("원격 설치는 SSH 기반 검증 로그를 기다린 뒤 반환한다", async () => {
     let resolveClaudeVerification: (value: { installed: true; hasSettingsEntry: true }) => void = () => {};
     mockGetClaudeHooksStatus.mockReturnValue(new Promise((resolve) => {
       resolveClaudeVerification = resolve;
@@ -454,9 +474,10 @@ describe("kanvibeHooksInstaller", () => {
     expect(mockGetGeminiHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
     expect(mockGetCodexHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
     expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
-    await installPromise;
-    expect(resolved).toBe(true);
+    expect(resolved).toBe(false);
 
     resolveClaudeVerification({ installed: true, hasSettingsEntry: true });
+    await installPromise;
+    expect(resolved).toBe(true);
   });
 });

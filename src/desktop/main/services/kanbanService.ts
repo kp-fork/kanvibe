@@ -47,7 +47,6 @@ const ACTIVE_PULL_TASK_STATUSES = [
   TaskStatus.PENDING,
   TaskStatus.REVIEW,
 ];
-const REMOTE_TASK_HOOK_INSTALL_SYNC_WAIT_MS = 1_500;
 const notifiedPullFailureKeys = new Set<string>();
 
 interface CleanupTaskResourcesOptions {
@@ -148,82 +147,16 @@ export function scheduleTaskHookInstall(
   });
 }
 
-type HookInstallWaitResult =
-  | { status: "completed" }
-  | { status: "failed"; error: unknown }
-  | { status: "timed-out" };
-
-async function installTaskHooksWithResponsiveRemoteFallback(
+async function installTaskHooksSafely(
   targetPath: string,
   task: Pick<KanbanTask, "id" | "title" | "sshHost">,
   failureLogMessage: string,
 ) {
-  const installJob = installKanvibeHooks(targetPath, task.id, task.sshHost);
-
-  if (!task.sshHost) {
-    try {
-      await installJob;
-    } catch (error) {
-      reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
-    }
-    return;
+  try {
+    await installKanvibeHooks(targetPath, task.id, task.sshHost);
+  } catch (error) {
+    reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
   }
-
-  const waitResult = await waitForHookInstall(installJob, REMOTE_TASK_HOOK_INSTALL_SYNC_WAIT_MS);
-  if (waitResult.status === "completed") {
-    return;
-  }
-
-  if (waitResult.status === "failed") {
-    reportTaskHookInstallFailure(targetPath, task, waitResult.error, failureLogMessage);
-    return;
-  }
-
-  void installJob
-    .then(() => {
-      broadcastBoardUpdate();
-    })
-    .catch((error) => {
-      reportTaskHookInstallFailure(targetPath, task, error, "새 태스크 hooks 백그라운드 설치 실패");
-    });
-}
-
-function waitForHookInstall(
-  installJob: Promise<void>,
-  timeoutMs: number,
-): Promise<HookInstallWaitResult> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      resolve({ status: "timed-out" });
-    }, timeoutMs);
-
-    installJob.then(
-      () => {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        clearTimeout(timeout);
-        resolve({ status: "completed" });
-      },
-      (error) => {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        clearTimeout(timeout);
-        resolve({ status: "failed", error });
-      },
-    );
-  });
 }
 
 function reportTaskHookInstallFailure(
@@ -653,7 +586,7 @@ export async function createTask(input: CreateTaskInput): Promise<KanbanTask> {
   const saved = await repo.save(task);
 
   if (shouldInstallHooks && hookTargetPath) {
-    await installTaskHooksWithResponsiveRemoteFallback(
+    await installTaskHooksSafely(
       hookTargetPath,
       saved,
       "새 태스크 hooks 동기 설치 실패",
@@ -887,7 +820,7 @@ export async function branchFromTask(
   const saved = await repo.save(task);
 
   if (session.worktreePath) {
-    await installTaskHooksWithResponsiveRemoteFallback(
+    await installTaskHooksSafely(
       session.worktreePath,
       saved,
       "Hooks 설정 실패",
@@ -920,6 +853,12 @@ export async function connectTerminalSession(
   const workingDir = task.worktreePath || project.repoPath;
 
   try {
+    await installTaskHooksSafely(workingDir, {
+      id: task.id,
+      title: task.title,
+      sshHost: project.sshHost,
+    }, "터미널 연결 전 hooks 동기 설치 실패");
+
     const session = await createSessionWithoutWorktree(
       project.repoPath,
       branchForSession,
@@ -935,11 +874,6 @@ export async function connectTerminalSession(
     task.status = TaskStatus.PROGRESS;
 
     const saved = await repo.save(task);
-    scheduleTaskHookInstall(workingDir, {
-      id: saved.id,
-      title: saved.title,
-      sshHost: saved.sshHost,
-    });
     broadcastBoardUpdate();
     return serialize(saved);
   } catch (error) {
