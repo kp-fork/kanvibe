@@ -149,7 +149,7 @@
     "noProjects": "没有已注册的项目。",
     "defaultBranch": "默认分支",
     "deleteProject": "删除",
-    "deleteConfirm": "确定要删除 \"{name}\" 吗？",
+    "deleteConfirm": "要从 KanVibe 删除 \"{name}\" 吗？这会从数据库中删除该项目的 KanVibe 任务，但会保留 git 分支和 worktree。",
     "hooksInstalled": "Hooks 已安装",
     "hooksNotInstalled": "未安装 Hooks",
     "installHooks": "安装 Hooks",

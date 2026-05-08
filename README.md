@@ -113,6 +113,8 @@ Always run these commands under Node 24.x.
 
 Search for your local git repository using the **fzf-style folder search** in project settings. KanVibe scans the directory and automatically detects existing worktree branches.
 
+To stop managing a project, delete it from project settings. This removes the project and its KanVibe tasks from the embedded SQLite database only; git branches, worktrees, and files on disk are kept.
+
 ### 2. Create Tasks
 
 Add a TODO task from the Kanban board. When creating a task with a branch name, KanVibe automatically:
@@ -158,6 +160,7 @@ Each pane can run a custom command (e.g., `vim`, `htop`, `lazygit`, test runner,
 - Automatic git worktree creation when a branch-based task is created
 - Worktree scanning: existing branches are auto-registered as TODO tasks
 - Automatic cleanup (branch + worktree + session) when task moves to DONE
+- Project deletion from settings only removes KanVibe database records for that project and its tasks; existing branches and worktrees remain untouched
 
 ### Terminal Sessions (tmux / zellij)
 - **tmux** and **zellij** are both supported as terminal multiplexers

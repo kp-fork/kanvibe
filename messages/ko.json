@@ -150,7 +150,7 @@
     "noProjects": "등록된 프로젝트가 없습니다.",
     "defaultBranch": "기본 브랜치",
     "deleteProject": "삭제",
-    "deleteConfirm": "\"{name}\" 프로젝트를 삭제하시겠습니까?",
+    "deleteConfirm": "\"{name}\" 프로젝트를 KanVibe에서 삭제하시겠습니까? 이 프로젝트의 KanVibe task DB 레코드는 삭제되지만 git branch와 worktree는 보존됩니다.",
     "hooksInstalled": "Hooks 설치됨",
     "hooksNotInstalled": "Hooks 미설치",
     "installHooks": "Hooks 설치",

@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ProjectSettings from "../ProjectSettings";
 import { SessionType } from "@/entities/KanbanTask";
 import type { Project } from "@/entities/Project";
+import enMessages from "../../../messages/en.json";
+import { deleteProject } from "@/desktop/renderer/actions/project";
 
 const mockSetDefaultSessionType = vi.fn().mockResolvedValue(undefined);
 const mockSetNotificationEnabled = vi.fn().mockResolvedValue(undefined);
@@ -10,7 +12,13 @@ const mockSetNotificationStatuses = vi.fn().mockResolvedValue(undefined);
 const mockSetThemePreference = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: (namespace?: string) => (key: string, values?: Record<string, string>) => {
+    if (namespace === "settings" && key === "deleteConfirm") {
+      return enMessages.settings.deleteConfirm.replace(/\{(\w+)\}/g, (_, name: string) => values?.[name] ?? `{${name}}`);
+    }
+
+    return key;
+  },
 }));
 
 vi.mock("@/desktop/renderer/navigation", () => ({
@@ -176,6 +184,37 @@ describe("ProjectSettings", () => {
 
     // Then
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("프로젝트 삭제 확인 문구는 task DB 삭제와 branch/worktree 보존을 알린다", async () => {
+    // Given
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <ProjectSettings
+        isOpen
+        onClose={vi.fn()}
+        projects={[createProject()]}
+        sshHosts={[]}
+        sidebarDefaultCollapsed={false}
+        defaultSessionType={SessionType.TMUX}
+        notificationSettings={{ isEnabled: true, enabledStatuses: ["progress", "pending", "review"] }}
+      />,
+    );
+
+    try {
+      // When
+      fireEvent.click(screen.getByRole("button", { name: "deleteProject" }));
+
+      // Then
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("KanVibe tasks"));
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("branches and worktrees"));
+      await waitFor(() => {
+        expect(deleteProject).toHaveBeenCalledWith("project-1");
+      });
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 
   it("알림 활성화 토글은 로컬 상태를 즉시 반영한다", async () => {
