@@ -83,6 +83,17 @@ function extractWrittenContent(calls: unknown[][], filePath: string): string {
   return Buffer.from(encodedMatch[1], "base64").toString("utf-8");
 }
 
+function buildRemoteTextFileRecords(files: Record<string, string>): string {
+  return Object.entries(files)
+    .map(([filePath, content]) => [
+      "__KANVIBE_FILE_RECORD__",
+      filePath,
+      "1",
+      Buffer.from(content, "utf-8").toString("base64"),
+    ].join("\t"))
+    .join("\n");
+}
+
 describe("kanvibeHooksInstaller", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -123,6 +134,215 @@ describe("kanvibeHooksInstaller", () => {
     expect(mockSetupCodexHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
     expect(mockSetupOpenCodeHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
     expect(mockExecGit).not.toHaveBeenCalled();
+  });
+
+  it("hook 파일 설치 API는 provider 검증을 기다리지 않는다", async () => {
+    // Given
+    const { installKanvibeHookFiles } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When
+    await installKanvibeHookFiles("/repo", "task-1", null);
+
+    // Then
+    expect(mockSetupClaudeHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupGeminiHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupCodexHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockGetClaudeHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetGeminiHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetCodexHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetOpenCodeHooksStatus).not.toHaveBeenCalled();
+  });
+
+  it("검증 스케줄러는 hook 파일을 다시 쓰지 않고 provider status만 확인한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      const onSuccess = vi.fn();
+      const onFailure = vi.fn();
+      mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+      mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+      mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
+
+      const { scheduleKanvibeHooksVerification } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      scheduleKanvibeHooksVerification("/remote/repo", "task-2", "remote-host", {
+        onSuccess,
+        onFailure,
+      });
+
+      // Then
+      expect(mockGetClaudeHooksStatus).not.toHaveBeenCalled();
+      expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+
+      await vi.runAllTimersAsync();
+
+      expect(mockGetClaudeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetGeminiHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetCodexHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+      expect(mockSetupGeminiHooks).not.toHaveBeenCalled();
+      expect(mockSetupCodexHooks).not.toHaveBeenCalled();
+      expect(mockSetupOpenCodeHooks).not.toHaveBeenCalled();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("검증 스케줄러는 provider 검증 실패를 failure callback으로 전달한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      const onSuccess = vi.fn();
+      const onFailure = vi.fn();
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+
+      const { scheduleKanvibeHooksVerification } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      scheduleKanvibeHooksVerification("/repo", "task-1", null, {
+        onSuccess,
+        onFailure,
+      });
+      await vi.runAllTimersAsync();
+
+      // Then
+      expect(onSuccess).not.toHaveBeenCalled();
+      expect(onFailure).toHaveBeenCalledTimes(1);
+      expect(onFailure.mock.calls[0][0]).toEqual(expect.any(Error));
+      expect((onFailure.mock.calls[0][0] as Error).message).toContain(
+        "hooks 검증 실패: Codex(hasConfigEntry)",
+      );
+      expect(mockSetupCodexHooks).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("provider별 설치는 선택한 provider setup만 기다리고 다른 provider는 실행하지 않는다", async () => {
+    // Given
+    const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When
+    await installKanvibeHookProvider("/repo", "task-1", "codex", null);
+
+    // Then
+    expect(mockSetupCodexHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+    expect(mockSetupGeminiHooks).not.toHaveBeenCalled();
+    expect(mockSetupOpenCodeHooks).not.toHaveBeenCalled();
+  });
+
+  it("OpenCode 등록만 누락된 상태는 전체 hook 설치 실패로 처리하지 않는다", async () => {
+    // Given
+    mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+    mockGetOpenCodeHooksStatus.mockResolvedValue({
+      installed: false,
+      hasPlugin: true,
+      hasRegisteredPlugin: false,
+      hasTaskIdBinding: true,
+      hasExpectedTaskId: true,
+      hasStatusEndpoint: true,
+      hasEventMappings: true,
+      hasMainSessionGuard: true,
+      hasDuplicateProgressGuard: true,
+      hasExpectedHookServerUrl: true,
+    });
+
+    const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When & Then
+    await expect(installKanvibeHooks("/repo", "task-1", null)).resolves.toBeUndefined();
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(1);
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith("[hooks] OpenCode verification", expect.objectContaining({
+      failedChecks: ["hasRegisteredPlugin"],
+      installed: false,
+      targetPath: "/repo",
+    }));
+  });
+
+  it("OpenCode 단독 설치도 등록 누락만으로 실패하지 않는다", async () => {
+    // Given
+    mockGetOpenCodeHooksStatus.mockResolvedValue({
+      installed: false,
+      hasPlugin: true,
+      hasRegisteredPlugin: false,
+      hasTaskIdBinding: true,
+      hasExpectedTaskId: true,
+      hasStatusEndpoint: true,
+      hasEventMappings: true,
+      hasMainSessionGuard: true,
+      hasDuplicateProgressGuard: true,
+      hasExpectedHookServerUrl: true,
+    });
+
+    const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When & Then
+    await expect(installKanvibeHookProvider("/repo", "task-1", "openCode", null)).resolves.toBeUndefined();
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(1);
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("OpenCode 단독 설치는 plugin 파일 검증 실패를 전파한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      mockGetOpenCodeHooksStatus.mockResolvedValue({
+        installed: false,
+        hasPlugin: false,
+        hasRegisteredPlugin: false,
+      });
+
+      const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      const result = expect(installKanvibeHookProvider("/repo", "task-1", "openCode", null)).rejects.toThrow(
+        "hooks 검증 실패: OpenCode(hasPlugin)",
+      );
+      await vi.runAllTimersAsync();
+
+      // Then
+      await result;
+      expect(mockSetupOpenCodeHooks).toHaveBeenCalledTimes(3);
+      expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("provider별 설치 실패는 다른 provider setup으로 재시도하지 않는다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      mockSetupCodexHooks.mockRejectedValue(new Error("codex busy"));
+      const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      const result = expect(installKanvibeHookProvider("/repo", "task-1", "codex", null)).rejects.toThrow("codex busy");
+      await vi.runAllTimersAsync();
+
+      // Then
+      await result;
+      expect(mockSetupCodexHooks).toHaveBeenCalledTimes(3);
+      expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+      expect(mockSetupGeminiHooks).not.toHaveBeenCalled();
+      expect(mockSetupOpenCodeHooks).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("로컬 hook 설치가 일시적으로 실패하면 재시도 후 성공한다", async () => {
@@ -218,25 +438,45 @@ describe("kanvibeHooksInstaller", () => {
     );
   });
 
+  it("원격 전체 hook 설치는 기존 설정 파일을 한 번의 SSH 명령으로 읽는다", async () => {
+    // Given
+    const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When
+    await installKanvibeHooks("/remote/repo", "task-2", "remote-host");
+
+    // Then
+    const batchReadCommands = mockExecGit.mock.calls.filter(([command]) => typeof command === "string"
+      && command.includes("__KANVIBE_FILE_RECORD__"));
+    const individualReadCommands = mockExecGit.mock.calls.filter(([command]) => typeof command === "string"
+      && command.includes(" cat "));
+    const writeCommands = mockExecGit.mock.calls.filter(([command]) => typeof command === "string"
+      && command.includes("printf '%s'")
+      && command.includes(" > "));
+
+    expect(batchReadCommands).toHaveLength(1);
+    expect(individualReadCommands).toHaveLength(0);
+    expect(writeCommands).toHaveLength(4);
+  });
+
   it("원격 Claude/Gemini stale hook entry도 재설치 시 현재 project 경로로 덮어쓴다", async () => {
     mockExecGit.mockImplementation(async (command: string) => {
-      if (command.includes('cat "/remote/repo/.claude/settings.json"')) {
-        return JSON.stringify({
-          hooks: {
-            UserPromptSubmit: [{ hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-prompt-hook.sh"', timeout: 10 }] }],
-            PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-question-hook.sh"', timeout: 10 }] }],
-            PostToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-prompt-hook.sh"', timeout: 10 }] }],
-            Stop: [{ hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-stop-hook.sh"', timeout: 10 }] }],
-          },
-        });
-      }
-
-      if (command.includes('cat "/remote/repo/.gemini/settings.json"')) {
-        return JSON.stringify({
-          hooks: {
-            BeforeAgent: [{ matcher: "*", hooks: [{ type: "command", command: '"/tmp/old/.gemini/hooks/kanvibe-prompt-hook.sh"', timeout: 10000 }] }],
-            AfterAgent: [{ matcher: "*", hooks: [{ type: "command", command: '"/tmp/old/.gemini/hooks/kanvibe-stop-hook.sh"', timeout: 10000 }] }],
-          },
+      if (command.includes("__KANVIBE_FILE_RECORD__")) {
+        return buildRemoteTextFileRecords({
+          "/remote/repo/.claude/settings.json": JSON.stringify({
+            hooks: {
+              UserPromptSubmit: [{ hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-prompt-hook.sh"', timeout: 10 }] }],
+              PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-question-hook.sh"', timeout: 10 }] }],
+              PostToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-prompt-hook.sh"', timeout: 10 }] }],
+              Stop: [{ hooks: [{ type: "command", command: '"/tmp/old/.claude/hooks/kanvibe-stop-hook.sh"', timeout: 10 }] }],
+            },
+          }),
+          "/remote/repo/.gemini/settings.json": JSON.stringify({
+            hooks: {
+              BeforeAgent: [{ matcher: "*", hooks: [{ type: "command", command: '"/tmp/old/.gemini/hooks/kanvibe-prompt-hook.sh"', timeout: 10000 }] }],
+              AfterAgent: [{ matcher: "*", hooks: [{ type: "command", command: '"/tmp/old/.gemini/hooks/kanvibe-stop-hook.sh"', timeout: 10000 }] }],
+            },
+          }),
         });
       }
 
@@ -264,12 +504,11 @@ describe("kanvibeHooksInstaller", () => {
 
   it("원격 Codex 재설치는 최신 hooks.json/config.toml 구조로 갱신한다", async () => {
     mockExecGit.mockImplementation(async (command: string) => {
-      if (command.includes('cat "/remote/repo/.codex/config.toml"')) {
-        return 'model = "gpt-5"\nnotify = ["other-notify.sh"]\n';
-      }
-
-      if (command.includes('cat "/remote/repo/.codex/hooks.json"')) {
-        return JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "old-stop" }] }] } });
+      if (command.includes("__KANVIBE_FILE_RECORD__")) {
+        return buildRemoteTextFileRecords({
+          "/remote/repo/.codex/config.toml": 'model = "gpt-5"\nnotify = ["other-notify.sh"]\n',
+          "/remote/repo/.codex/hooks.json": JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "old-stop" }] }] } }),
+        });
       }
 
       return "";
@@ -280,6 +519,7 @@ describe("kanvibeHooksInstaller", () => {
     await installKanvibeHooks("/remote/repo", "task-2", "remote-host");
 
     const configContent = extractWrittenContent(mockExecGit.mock.calls, "/remote/repo/.codex/config.toml");
+    expect(configContent).toContain('model = "gpt-5"');
     expect(configContent).toContain("[features]");
     expect(configContent).toContain("codex_hooks = true");
 
@@ -290,13 +530,13 @@ describe("kanvibeHooksInstaller", () => {
     expect(hooksContent).toContain("Stop");
   });
 
-  it("원격 hook 설치 중 SSH 쓰기가 계속 실패하면 재시도 후 예외를 전파한다", async () => {
+  it("원격 hook 설치 중 SSH 쓰기가 계속 실패해도 모든 provider 쓰기를 시도한 뒤 예외를 전파한다", async () => {
     vi.useFakeTimers();
 
     try {
       // Given
       mockExecGit.mockImplementation(async (command: string) => {
-        if (command.includes("printf '%s'")) {
+        if (command.includes("printf '%s'") && command.includes(" > ")) {
           throw new Error("remote host unavailable");
         }
 
@@ -310,7 +550,10 @@ describe("kanvibeHooksInstaller", () => {
 
       // Then
       await result;
-      expect(mockExecGit).toHaveBeenCalledTimes(6);
+      const writeCommands = mockExecGit.mock.calls.filter(([command]) => typeof command === "string"
+        && command.includes("printf '%s'")
+        && command.includes(" > "));
+      expect(writeCommands).toHaveLength(12);
     } finally {
       vi.useRealTimers();
     }
@@ -339,7 +582,7 @@ describe("kanvibeHooksInstaller", () => {
   it("설치 후 provider별 검증 결과를 로그로 남긴다", async () => {
     mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
     mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
-    mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
     mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
 
     const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
@@ -355,25 +598,58 @@ describe("kanvibeHooksInstaller", () => {
       targetPath: "/repo",
       taskId: "task-1",
     }));
-    expect(console.warn).toHaveBeenCalledWith("[hooks] Codex verification", expect.objectContaining({
-      installed: false,
-      failedChecks: ["hasConfigEntry"],
-      targetPath: "/repo",
-    }));
   });
 
-  it("원격 설치는 후속 검증을 기다리지 않고 반환한다", async () => {
-    const pendingVerification = new Promise(() => {});
-    mockGetClaudeHooksStatus.mockReturnValue(pendingVerification);
-    mockGetGeminiHooksStatus.mockReturnValue(pendingVerification);
-    mockGetCodexHooksStatus.mockReturnValue(pendingVerification);
-    mockGetOpenCodeHooksStatus.mockReturnValue(pendingVerification);
+  it("검증에서 미설치 provider가 있으면 설치 실패로 재시도 후 전파한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+
+      const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
+
+      const result = expect(installKanvibeHooks("/repo", "task-1", null)).rejects.toThrow(
+        "hooks 검증 실패: Codex(hasConfigEntry)",
+      );
+      await vi.runAllTimersAsync();
+
+      await result;
+      expect(mockGetCodexHooksStatus).toHaveBeenCalledTimes(3);
+      expect(console.warn).toHaveBeenCalledWith("[hooks] Codex verification", expect.objectContaining({
+        installed: false,
+        failedChecks: ["hasConfigEntry"],
+        targetPath: "/repo",
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("원격 설치는 SSH 기반 검증 로그를 기다린 뒤 반환한다", async () => {
+    let resolveClaudeVerification: (value: { installed: true; hasSettingsEntry: true }) => void = () => {};
+    mockGetClaudeHooksStatus.mockReturnValue(new Promise((resolve) => {
+      resolveClaudeVerification = resolve;
+    }));
+    mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+    mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
 
     const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
 
-    await expect(Promise.race([
-      installKanvibeHooks("/remote/repo", "task-2", "remote-host").then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("timed-out"), 50)),
-    ])).resolves.toBe("resolved");
+    let resolved = false;
+    const installPromise = installKanvibeHooks("/remote/repo", "task-2", "remote-host").then(() => {
+      resolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockGetClaudeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetGeminiHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetCodexHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(resolved).toBe(false);
+
+    resolveClaudeVerification({ installed: true, hasSettingsEntry: true });
+    await installPromise;
+    expect(resolved).toBe(true);
   });
 });

@@ -12,7 +12,11 @@ import {
   type BackgroundSyncFailurePayload,
   type TaskPrMergedDetectedPayload,
 } from "@/lib/boardNotifier";
-import { installKanvibeHooks, scheduleKanvibeHooksInstall } from "@/lib/kanvibeHooksInstaller";
+import {
+  installKanvibeHookFiles,
+  scheduleKanvibeHooksInstall,
+  scheduleKanvibeHooksVerification,
+} from "@/lib/kanvibeHooksInstaller";
 import { execGit, pullCurrentBranch, remoteBranchExists } from "@/lib/gitOperations";
 import { detachSession } from "@/lib/terminal";
 
@@ -41,6 +45,7 @@ export interface SearchableTask {
 }
 
 const DONE_PAGE_SIZE = 20;
+const TERMINAL_HOOK_INSTALL_PRE_ATTACH_WAIT_MS = 1_500;
 const ACTIVE_PULL_TASK_STATUSES = [
   TaskStatus.TODO,
   TaskStatus.PROGRESS,
@@ -142,22 +147,93 @@ export function scheduleTaskHookInstall(
       broadcastBoardUpdate();
     },
     onFailure: (error) => {
-      const errorMessage = getErrorMessage(error);
-
-      console.error("새 태스크 hooks 백그라운드 설치 실패:", {
-        taskId: task.id,
-        taskTitle: task.title,
-        targetPath,
-        sshHost: task.sshHost ?? null,
-        error: errorMessage,
-      });
-
-      broadcastTaskHookInstallFailed({
-        taskId: task.id,
-        taskTitle: task.title,
-        error: errorMessage,
-      });
+      reportTaskHookInstallFailure(targetPath, task, error, "새 태스크 hooks 백그라운드 설치 실패");
     },
+  });
+}
+
+function scheduleTaskHookVerification(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+) {
+  scheduleKanvibeHooksVerification(targetPath, task.id, task.sshHost, {
+    onSuccess: () => {
+      broadcastBoardUpdate();
+    },
+    onFailure: (error) => {
+      reportTaskHookInstallFailure(targetPath, task, error, "hooks 백그라운드 검증 실패");
+    },
+  });
+}
+
+async function installTaskHookFilesSafely(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+  failureLogMessage: string,
+) {
+  try {
+    await installKanvibeHookFiles(targetPath, task.id, task.sshHost);
+    scheduleTaskHookVerification(targetPath, task);
+  } catch (error) {
+    reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
+  }
+}
+
+async function installTaskHookFilesBeforeTerminalAttach(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+) {
+  const installJob = installTaskHookFilesSafely(
+    targetPath,
+    task,
+    "터미널 연결 전 hooks 동기 설치 실패",
+  );
+
+  const installResult = await waitForTerminalHookInstallPreAttach(installJob);
+  if (installResult === "timeout") {
+    void installJob;
+  }
+}
+
+async function waitForTerminalHookInstallPreAttach(
+  installJob: Promise<void>,
+): Promise<"completed" | "timeout"> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      installJob.then(() => "completed" as const),
+      new Promise<"timeout">((resolve) => {
+        timeoutId = setTimeout(() => resolve("timeout"), TERMINAL_HOOK_INSTALL_PRE_ATTACH_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+function reportTaskHookInstallFailure(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+  error: unknown,
+  logMessage: string,
+) {
+  const errorMessage = getErrorMessage(error);
+
+  console.error(`${logMessage}:`, {
+    taskId: task.id,
+    taskTitle: task.title,
+    targetPath,
+    sshHost: task.sshHost ?? null,
+    error: errorMessage,
+  });
+
+  broadcastTaskHookInstallFailed({
+    taskId: task.id,
+    taskTitle: task.title,
+    error: errorMessage,
   });
 }
 
@@ -565,11 +641,11 @@ export async function createTask(input: CreateTaskInput): Promise<KanbanTask> {
   const saved = await repo.save(task);
 
   if (shouldInstallHooks && hookTargetPath) {
-    scheduleTaskHookInstall(hookTargetPath, {
-      id: saved.id,
-      title: saved.title,
-      sshHost: saved.sshHost,
-    });
+    await installTaskHookFilesSafely(
+      hookTargetPath,
+      saved,
+      "새 태스크 hooks 동기 설치 실패",
+    );
   }
 
   broadcastBoardUpdate();
@@ -799,11 +875,11 @@ export async function branchFromTask(
   const saved = await repo.save(task);
 
   if (session.worktreePath) {
-    try {
-      await installKanvibeHooks(session.worktreePath, saved.id, project.sshHost);
-    } catch (error) {
-      console.error("Hooks 설정 실패:", error);
-    }
+    await installTaskHookFilesSafely(
+      session.worktreePath,
+      saved,
+      "Hooks 설정 실패",
+    );
   }
 
   broadcastBoardUpdate();
@@ -832,6 +908,12 @@ export async function connectTerminalSession(
   const workingDir = task.worktreePath || project.repoPath;
 
   try {
+    await installTaskHookFilesBeforeTerminalAttach(workingDir, {
+      id: task.id,
+      title: task.title,
+      sshHost: project.sshHost,
+    });
+
     const session = await createSessionWithoutWorktree(
       project.repoPath,
       branchForSession,
@@ -847,11 +929,6 @@ export async function connectTerminalSession(
     task.status = TaskStatus.PROGRESS;
 
     const saved = await repo.save(task);
-    scheduleTaskHookInstall(workingDir, {
-      id: saved.id,
-      title: saved.title,
-      sshHost: saved.sshHost,
-    });
     broadcastBoardUpdate();
     return serialize(saved);
   } catch (error) {

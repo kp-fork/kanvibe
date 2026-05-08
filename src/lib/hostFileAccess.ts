@@ -87,7 +87,7 @@ export async function readTextFiles(
 
   const encodedManifest = encodeRemoteTextFileManifest(targetPaths);
   const command = [
-    `printf '%s' ${quoteShellArgument(encodedManifest)} | (base64 -d 2>/dev/null || base64 -D) | while IFS= read -r __kanvibe_encoded_file; do`,
+    `printf '%s' ${quoteShellArgument(encodedManifest)} | (base64 -d 2>/dev/null || base64 -D) | while IFS= read -r __kanvibe_encoded_file || test -n "$__kanvibe_encoded_file"; do`,
     "test -n \"$__kanvibe_encoded_file\" || continue;",
     "__kanvibe_file=$(printf '%s' \"$__kanvibe_encoded_file\" | (base64 -d 2>/dev/null || base64 -D));",
     `printf '%s\\t%s\\t' ${quoteShellArgument(REMOTE_FILE_RECORD_PREFIX)} "$__kanvibe_file";`,

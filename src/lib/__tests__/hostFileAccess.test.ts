@@ -84,4 +84,24 @@ describe("hostFileAccess.readTextFiles", () => {
     expect(files.get(filePath)).toEqual({ exists: true, content });
     expect(files.get(missingPath)).toEqual({ exists: false, content: "" });
   });
+
+  it("원격 파일 묶음 읽기는 manifest 마지막 파일도 누락하지 않는다", async () => {
+    // Given
+    const missingPath = path.join(tempDir, "missing.txt");
+    const finalFilePath = path.join(tempDir, "hooks.json");
+    const finalContent = JSON.stringify({ hooks: { Stop: [{ command: "custom" }] } });
+    await writeFile(finalFilePath, finalContent, "utf-8");
+    mocks.execGit.mockImplementation(async (command: string) => {
+      const { stdout } = await execFileAsync("sh", ["-lc", command]);
+      return stdout;
+    });
+    const { readTextFiles } = await import("@/lib/hostFileAccess");
+
+    // When
+    const files = await readTextFiles([missingPath, finalFilePath], "remote-host");
+
+    // Then
+    expect(files.get(missingPath)).toEqual({ exists: false, content: "" });
+    expect(files.get(finalFilePath)).toEqual({ exists: true, content: finalContent });
+  });
 });
