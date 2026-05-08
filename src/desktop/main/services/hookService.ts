@@ -3,9 +3,9 @@ import { getProjectRepository, getTaskRepository } from "@/lib/database";
 import { createWorktreeWithSession } from "@/lib/worktree";
 import { broadcastBoardUpdate, broadcastHookStatusTargetMissing, broadcastTaskStatusChanged } from "@/lib/boardNotifier";
 import {
+  installTaskHooksImmediately,
   prepareOptimisticDoneTransition,
   scheduleDoneCleanupWithRollback,
-  scheduleTaskHookInstall,
   type DoneCleanupPlan,
 } from "@/desktop/main/services/kanbanService";
 
@@ -77,11 +77,15 @@ export async function startHookTask(input: HookStartInput) {
   const saved = await repo.save(task);
 
   if (saved.worktreePath) {
-    scheduleTaskHookInstall(saved.worktreePath, {
-      id: saved.id,
-      title: saved.title,
-      sshHost: saved.sshHost,
-    });
+    await installTaskHooksImmediately(
+      saved.worktreePath,
+      {
+        id: saved.id,
+        title: saved.title,
+        sshHost: saved.sshHost,
+      },
+      "새 태스크 hooks 동기 설치 실패",
+    );
   }
 
   broadcastBoardUpdate();
