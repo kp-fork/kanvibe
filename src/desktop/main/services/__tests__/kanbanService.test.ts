@@ -343,6 +343,40 @@ describe("kanbanService.createTask", () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it("즉시 hooks 전체 설치는 검증 포함 설치를 사용하고 실패를 전파한다", async () => {
+    // Given
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const installError = new Error("verification unavailable");
+    mocks.installKanvibeHooks.mockRejectedValueOnce(installError);
+
+    const { installTaskHooksImmediately } = await import("@/desktop/main/services/kanbanService");
+
+    // When & Then
+    await expect(installTaskHooksImmediately(
+      "/remote/repo__worktrees/feature-task",
+      {
+        id: "task-1",
+        title: "원격 hooks 보장",
+        sshHost: "remote-host",
+      } as never,
+      "새 태스크 hooks 동기 설치 실패",
+    )).rejects.toBe(installError);
+
+    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+      "/remote/repo__worktrees/feature-task",
+      "task-1",
+      "remote-host",
+    );
+    expect(mocks.installKanvibeHookFiles).not.toHaveBeenCalled();
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
+    expect(mocks.broadcastTaskHookInstallFailed).toHaveBeenCalledWith({
+      taskId: "task-1",
+      taskTitle: "원격 hooks 보장",
+      error: "verification unavailable",
+    });
+    consoleErrorSpy.mockRestore();
+  });
+
   it("동기 hooks 설치가 성공하면 설치 이후 board update를 한 번 브로드캐스트한다", async () => {
     // Given
     mocks.projectRepo.findOneBy.mockResolvedValue({

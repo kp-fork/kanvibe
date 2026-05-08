@@ -13,8 +13,8 @@ import {
   type TaskPrMergedDetectedPayload,
 } from "@/lib/boardNotifier";
 import {
+  installKanvibeHooks,
   installKanvibeHookFiles,
-  scheduleKanvibeHooksInstall,
   scheduleKanvibeHooksVerification,
 } from "@/lib/kanvibeHooksInstaller";
 import { execGit, pullCurrentBranch, remoteBranchExists } from "@/lib/gitOperations";
@@ -138,20 +138,6 @@ function quoteForShell(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-export function scheduleTaskHookInstall(
-  targetPath: string,
-  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
-) {
-  scheduleKanvibeHooksInstall(targetPath, task.id, task.sshHost, {
-    onSuccess: () => {
-      broadcastBoardUpdate();
-    },
-    onFailure: (error) => {
-      reportTaskHookInstallFailure(targetPath, task, error, "새 태스크 hooks 백그라운드 설치 실패");
-    },
-  });
-}
-
 function scheduleTaskHookVerification(
   targetPath: string,
   task: Pick<KanbanTask, "id" | "title" | "sshHost">,
@@ -166,7 +152,20 @@ function scheduleTaskHookVerification(
   });
 }
 
-async function installTaskHookFilesSafely(
+export async function installTaskHooksImmediately(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+  failureLogMessage: string,
+) {
+  try {
+    await installKanvibeHooks(targetPath, task.id, task.sshHost);
+  } catch (error) {
+    reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
+    throw error;
+  }
+}
+
+export async function installTaskHookFilesImmediately(
   targetPath: string,
   task: Pick<KanbanTask, "id" | "title" | "sshHost">,
   failureLogMessage: string,
@@ -183,7 +182,7 @@ async function installTaskHookFilesBeforeTerminalAttach(
   targetPath: string,
   task: Pick<KanbanTask, "id" | "title" | "sshHost">,
 ) {
-  const installJob = installTaskHookFilesSafely(
+  const installJob = installTaskHookFilesImmediately(
     targetPath,
     task,
     "터미널 연결 전 hooks 동기 설치 실패",
@@ -641,7 +640,7 @@ export async function createTask(input: CreateTaskInput): Promise<KanbanTask> {
   const saved = await repo.save(task);
 
   if (shouldInstallHooks && hookTargetPath) {
-    await installTaskHookFilesSafely(
+    await installTaskHookFilesImmediately(
       hookTargetPath,
       saved,
       "새 태스크 hooks 동기 설치 실패",
@@ -875,7 +874,7 @@ export async function branchFromTask(
   const saved = await repo.save(task);
 
   if (session.worktreePath) {
-    await installTaskHookFilesSafely(
+    await installTaskHookFilesImmediately(
       session.worktreePath,
       saved,
       "Hooks 설정 실패",
