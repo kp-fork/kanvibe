@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Project } from "@/entities/Project";
@@ -9,6 +9,11 @@ vi.mock("next-intl", () => ({
 }));
 
 import ProjectSelector, { type ProjectSelectorHandle } from "../ProjectSelector";
+
+const scrolledElements: HTMLElement[] = [];
+const scrollIntoViewMock = vi.fn(function (this: HTMLElement) {
+  scrolledElements.push(this);
+});
 
 function createProject(id: string, name: string): Project {
   return {
@@ -50,6 +55,15 @@ const projects = [
 ];
 
 describe("ProjectSelector chip truncation", () => {
+  beforeEach(() => {
+    scrolledElements.length = 0;
+    scrollIntoViewMock.mockClear();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoViewMock,
+    });
+  });
+
   afterEach(() => {
     cleanup();
   });
@@ -180,5 +194,49 @@ describe("ProjectSelector chip truncation", () => {
 
     await user.tab();
     expect(screen.getByRole("button", { name: "Select project" })).toBe(document.activeElement);
+  });
+
+  it("should scroll the highlighted single-select option into view after keyboard navigation", () => {
+    render(
+      <ProjectSelector
+        projects={projects}
+        selectedProjectId=""
+        onSelect={vi.fn()}
+        placeholder="Select project"
+        searchPlaceholder="Search project..."
+        allOption={{ label: "All projects" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "All projects" }));
+    scrolledElements.length = 0;
+    scrollIntoViewMock.mockClear();
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search project..."), { key: "ArrowDown" });
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrolledElements.at(-1)?.textContent).toContain("Alpha");
+  });
+
+  it("should scroll the highlighted multi-select option into view after keyboard navigation", () => {
+    render(
+      <ProjectSelector
+        multiple
+        projects={projects}
+        selectedProjectIds={[]}
+        onSelectionChange={vi.fn()}
+        placeholder="All projects"
+        searchPlaceholder="Search project..."
+      />,
+    );
+
+    fireEvent.click(screen.getByText("All projects"));
+    scrolledElements.length = 0;
+    scrollIntoViewMock.mockClear();
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search project..."), { key: "ArrowDown" });
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrolledElements.at(-1)?.textContent).toContain("Beta");
   });
 });

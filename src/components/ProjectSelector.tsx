@@ -78,6 +78,7 @@ const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(
   const isComposingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const optionItemRefs = useRef<Array<HTMLLIElement | null>>([]);
 
   const filteredProjects = searchQuery
     ? projects.filter((project) => matchesProjectSearch(project, searchQuery))
@@ -213,6 +214,17 @@ const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(
     ? Math.min(Math.max(highlightedIndex, 0), maxHighlightedIndex)
     : -1;
 
+  /** 키보드로 하이라이트된 항목이 드롭다운 안에 보이도록 스크롤한다 */
+  useEffect(() => {
+    if (!isOpen || normalizedHighlightedIndex < 0) {
+      return;
+    }
+
+    optionItemRefs.current[normalizedHighlightedIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [isOpen, normalizedHighlightedIndex, searchQuery]);
+
   // ===== 멀티 선택 모드 =====
   if (isMultiple) {
     const handleMultiKeyDown = (e: React.KeyboardEvent) => {
@@ -338,6 +350,9 @@ const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(
                   return (
                     <li
                       key={project.id}
+                      ref={(element) => {
+                        optionItemRefs.current[index] = element;
+                      }}
                       onMouseDown={(e) => {
                         e.preventDefault();
                         handleToggle(project.id);
@@ -496,6 +511,9 @@ const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(
           <ul className="max-h-48 overflow-y-auto">
             {showAllOption && (
               <li
+                ref={(element) => {
+                  optionItemRefs.current[0] = element;
+                }}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   handleSelectAll();
@@ -520,6 +538,9 @@ const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(
                 return (
                   <li
                     key={project.id}
+                    ref={(element) => {
+                      optionItemRefs.current[itemIndex] = element;
+                    }}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       handleToggle(project.id);
