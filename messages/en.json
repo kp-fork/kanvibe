@@ -150,7 +150,7 @@
     "noProjects": "No registered projects.",
     "defaultBranch": "Default branch",
     "deleteProject": "Delete",
-    "deleteConfirm": "Are you sure you want to delete \"{name}\"?",
+    "deleteConfirm": "Delete \"{name}\" from KanVibe? This removes the project's KanVibe tasks from the database, but keeps git branches and worktrees on disk.",
     "hooksInstalled": "Hooks Installed",
     "hooksNotInstalled": "No Hooks",
     "installHooks": "Install Hooks",

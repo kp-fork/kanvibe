@@ -501,12 +501,14 @@ export async function registerProject(
   return { success: true, project: serialize(saved) };
 }
 
-/** 프로젝트를 삭제한다. 연결된 작업의 projectId는 FK cascade로 null이 된다 */
+/** 프로젝트를 삭제한다. 연결된 task DB 레코드는 삭제하되 git branch/worktree는 건드리지 않는다 */
 export async function deleteProject(projectId: string): Promise<boolean> {
   const repo = await getProjectRepository();
   const project = await repo.findOneBy({ id: projectId });
   if (!project) return false;
 
+  const taskRepo = await getTaskRepository();
+  await taskRepo.delete({ projectId });
   await repo.remove(project);
   broadcastBoardUpdate();
   return true;

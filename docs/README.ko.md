@@ -113,6 +113,8 @@ macOS에서 `better-sqlite3` `NODE_MODULE_VERSION` 불일치가 발생하면, Ka
 
 프로젝트 설정에서 **fzf 스타일 폴더 검색**으로 로컬 git 저장소를 검색하고 등록합니다. KanVibe가 디렉토리를 스캔하여 기존 worktree 브랜치를 자동 감지합니다.
 
+프로젝트 관리를 중단하려면 프로젝트 설정에서 삭제하세요. 이 동작은 내장 SQLite 데이터베이스에서 해당 프로젝트와 KanVibe task만 삭제하며, 디스크의 git branch, worktree, 파일은 보존합니다.
+
 ### 2. 태스크 생성
 
 칸반 보드에서 TODO 태스크를 추가합니다. 브랜치명으로 태스크를 생성하면 KanVibe가 자동으로:
@@ -156,6 +158,7 @@ macOS에서 `better-sqlite3` `NODE_MODULE_VERSION` 불일치가 발생하면, Ka
 - 브랜치 기반 태스크 생성 시 git worktree 자동 생성
 - Worktree 스캔: 기존 브랜치를 TODO 태스크로 자동 등록
 - DONE 상태 전환 시 브랜치 + worktree + 세션 자동 정리
+- 설정에서 프로젝트를 삭제하면 해당 프로젝트와 task의 KanVibe DB 레코드만 삭제되며, 기존 branch와 worktree는 건드리지 않습니다
 
 ### 터미널 세션 (tmux / zellij)
 - **tmux**와 **zellij** 모두 터미널 멀티플렉서로 지원

@@ -134,6 +134,64 @@ vi.mock("@/lib/kanvibeHooksInstaller", () => ({
   scheduleKanvibeHooksInstall: mocks.scheduleKanvibeHooksInstall,
 }));
 
+describe("projectService.deleteProject", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("프로젝트 삭제 시 KanVibe DB의 관련 task 레코드도 삭제한다", async () => {
+    // Given
+    const project = {
+      id: "project-1",
+      name: "api",
+      repoPath: "/workspace/api",
+      defaultBranch: "main",
+      sshHost: null,
+    };
+    const projectRepo = {
+      findOneBy: vi.fn().mockResolvedValue(project),
+      remove: vi.fn().mockResolvedValue(project),
+    };
+    const taskRepo = {
+      delete: vi.fn().mockResolvedValue({ affected: 2 }),
+    };
+    mocks.getProjectRepository.mockResolvedValue(projectRepo);
+    mocks.getTaskRepository.mockResolvedValue(taskRepo);
+
+    const { deleteProject } = await import("@/desktop/main/services/projectService");
+
+    // When
+    const result = await deleteProject("project-1");
+
+    // Then
+    expect(result).toBe(true);
+    expect(taskRepo.delete).toHaveBeenCalledWith({ projectId: "project-1" });
+    expect(projectRepo.remove).toHaveBeenCalledWith(project);
+    expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("프로젝트가 없으면 task 삭제와 보드 갱신을 수행하지 않는다", async () => {
+    // Given
+    const projectRepo = {
+      findOneBy: vi.fn().mockResolvedValue(null),
+      remove: vi.fn(),
+    };
+    mocks.getProjectRepository.mockResolvedValue(projectRepo);
+
+    const { deleteProject } = await import("@/desktop/main/services/projectService");
+
+    // When
+    const result = await deleteProject("missing-project");
+
+    // Then
+    expect(result).toBe(false);
+    expect(mocks.getTaskRepository).not.toHaveBeenCalled();
+    expect(projectRepo.remove).not.toHaveBeenCalled();
+    expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+  });
+});
+
 describe("projectService.listSubdirectories", () => {
   beforeEach(() => {
     vi.resetModules();
