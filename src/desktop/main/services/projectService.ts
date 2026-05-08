@@ -1,7 +1,7 @@
 import { getProjectRepository, getTaskRepository } from "@/lib/database";
 import { Project } from "@/entities/Project";
 import { validateGitRepo, getDefaultBranch, listBranches, scanGitRepos, listWorktrees, execGit } from "@/lib/gitOperations";
-import { TaskStatus, SessionType } from "@/entities/KanbanTask";
+import { KanbanTask, TaskStatus, SessionType } from "@/entities/KanbanTask";
 import { IsNull } from "typeorm";
 import { isSessionAlive, formatSessionName, createSessionWithoutWorktree } from "@/lib/worktree";
 import { getClaudeHooksStatus, type ClaudeHooksStatus } from "@/lib/claudeHooksSetup";
@@ -97,8 +97,18 @@ const projectRootHookRepairJobs = new Map<string, Promise<void>>();
 const projectRootHookRepairScheduled = new Set<string>();
 const projectRootTaskRepairJobs = new Map<string, Promise<void>>();
 const projectRootTaskRepairScheduled = new Set<string>();
+const projectRootRepairDeletingProjectIds = new Set<string>();
+const projectRootRepairDeletedProjectIds = new Set<string>();
+
+function isProjectRootRepairBlocked(projectId: string): boolean {
+  return projectRootRepairDeletingProjectIds.has(projectId) || projectRootRepairDeletedProjectIds.has(projectId);
+}
 
 function scheduleProjectRootHookRepair(project: Project) {
+  if (isProjectRootRepairBlocked(project.id)) {
+    return;
+  }
+
   const projectPathKey = buildProjectPathKey(project.repoPath, project.sshHost);
   if (projectRootHookRepairScheduled.has(projectPathKey)) {
     return;
@@ -109,6 +119,10 @@ function scheduleProjectRootHookRepair(project: Project) {
   setTimeout(() => {
     const repairJob = (async () => {
       try {
+        if (isProjectRootRepairBlocked(project.id)) {
+          return;
+        }
+
         const { repaired } = await ensureProjectRootTask(project, {
           repairHooks: true,
           throwOnHookRepairFailure: false,
@@ -163,6 +177,10 @@ async function installSyncedWorktreeHooks(
 }
 
 function scheduleProjectRootTaskRepair(project: Project) {
+  if (isProjectRootRepairBlocked(project.id)) {
+    return;
+  }
+
   const projectPathKey = buildProjectPathKey(project.repoPath, project.sshHost);
   if (projectRootTaskRepairScheduled.has(projectPathKey)) {
     return;
@@ -173,6 +191,10 @@ function scheduleProjectRootTaskRepair(project: Project) {
   setTimeout(() => {
     const repairJob = (async () => {
       try {
+        if (isProjectRootRepairBlocked(project.id)) {
+          return;
+        }
+
         const { repaired } = await ensureProjectRootTask(project);
         scheduleProjectRootHookRepair(project);
 
@@ -309,6 +331,10 @@ async function ensureProjectRootTask(
     suppressRemoteConnectionErrorLogging?: boolean;
   },
 ): Promise<{ task: Awaited<ReturnType<typeof getProjectRootTask>>; repaired: boolean }> {
+  if (isProjectRootRepairBlocked(project.id)) {
+    return { task: null, repaired: false };
+  }
+
   const taskRepo = await getTaskRepository();
   const repairHooks = options?.repairHooks === true;
   const throwOnHookRepairFailure = options?.throwOnHookRepairFailure !== false;
@@ -504,12 +530,27 @@ export async function registerProject(
 /** 프로젝트를 삭제한다. 연결된 task DB 레코드는 삭제하되 git branch/worktree는 건드리지 않는다 */
 export async function deleteProject(projectId: string): Promise<boolean> {
   const repo = await getProjectRepository();
-  const project = await repo.findOneBy({ id: projectId });
-  if (!project) return false;
+  let projectDeleted = false;
 
-  const taskRepo = await getTaskRepository();
-  await taskRepo.delete({ projectId });
-  await repo.remove(project);
+  projectRootRepairDeletingProjectIds.add(projectId);
+  try {
+    await repo.manager.transaction(async (manager) => {
+      const project = await manager.findOneBy(Project, { id: projectId });
+      if (!project) {
+        return;
+      }
+
+      await manager.delete(KanbanTask, { projectId });
+      await manager.remove(project);
+      projectDeleted = true;
+    });
+  } finally {
+    projectRootRepairDeletingProjectIds.delete(projectId);
+  }
+
+  if (!projectDeleted) return false;
+
+  projectRootRepairDeletedProjectIds.add(projectId);
   broadcastBoardUpdate();
   return true;
 }

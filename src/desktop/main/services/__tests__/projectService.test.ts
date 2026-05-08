@@ -41,6 +41,7 @@ vi.mock("@/entities/Project", () => ({
 }));
 
 vi.mock("@/entities/KanbanTask", () => ({
+  KanbanTask: class KanbanTask {},
   TaskStatus: {
     TODO: "todo",
     PROGRESS: "progress",
@@ -149,15 +150,17 @@ describe("projectService.deleteProject", () => {
       defaultBranch: "main",
       sshHost: null,
     };
-    const projectRepo = {
+    const manager = {
       findOneBy: vi.fn().mockResolvedValue(project),
+      delete: vi.fn().mockResolvedValue({ affected: 2 }),
       remove: vi.fn().mockResolvedValue(project),
     };
-    const taskRepo = {
-      delete: vi.fn().mockResolvedValue({ affected: 2 }),
+    const projectRepo = {
+      manager: {
+        transaction: vi.fn(async (callback: (transactionManager: typeof manager) => Promise<void>) => callback(manager)),
+      },
     };
     mocks.getProjectRepository.mockResolvedValue(projectRepo);
-    mocks.getTaskRepository.mockResolvedValue(taskRepo);
 
     const { deleteProject } = await import("@/desktop/main/services/projectService");
 
@@ -166,16 +169,25 @@ describe("projectService.deleteProject", () => {
 
     // Then
     expect(result).toBe(true);
-    expect(taskRepo.delete).toHaveBeenCalledWith({ projectId: "project-1" });
-    expect(projectRepo.remove).toHaveBeenCalledWith(project);
+    expect(projectRepo.manager.transaction).toHaveBeenCalledTimes(1);
+    expect(manager.findOneBy).toHaveBeenCalledWith(expect.any(Function), { id: "project-1" });
+    expect(manager.delete).toHaveBeenCalledWith(expect.any(Function), { projectId: "project-1" });
+    expect(manager.remove).toHaveBeenCalledWith(project);
+    expect(mocks.getTaskRepository).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("프로젝트가 없으면 task 삭제와 보드 갱신을 수행하지 않는다", async () => {
     // Given
-    const projectRepo = {
+    const manager = {
       findOneBy: vi.fn().mockResolvedValue(null),
+      delete: vi.fn(),
       remove: vi.fn(),
+    };
+    const projectRepo = {
+      manager: {
+        transaction: vi.fn(async (callback: (transactionManager: typeof manager) => Promise<void>) => callback(manager)),
+      },
     };
     mocks.getProjectRepository.mockResolvedValue(projectRepo);
 
@@ -187,8 +199,69 @@ describe("projectService.deleteProject", () => {
     // Then
     expect(result).toBe(false);
     expect(mocks.getTaskRepository).not.toHaveBeenCalled();
-    expect(projectRepo.remove).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.remove).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+  });
+
+  it("삭제 중 예약된 root task repair는 기본 브랜치 task를 되살리지 않는다", async () => {
+    // Given
+    vi.useFakeTimers();
+
+    const project = {
+      id: "project-1",
+      name: "api",
+      repoPath: "/workspace/api",
+      defaultBranch: "main",
+      sshHost: null,
+    };
+    let releaseTransaction!: () => void;
+    const transactionStarted = new Promise<void>((resolve) => {
+      const manager = {
+        findOneBy: vi.fn().mockResolvedValue(project),
+        delete: vi.fn().mockResolvedValue({ affected: 1 }),
+        remove: vi.fn(async () => {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseTransaction = release;
+          });
+          return project;
+        }),
+      };
+
+      mocks.getProjectRepository.mockResolvedValue({
+        find: vi.fn().mockResolvedValue([project]),
+        manager: {
+          transaction: vi.fn(async (callback: (transactionManager: typeof manager) => Promise<void>) => callback(manager)),
+        },
+      });
+    });
+    const findOneBy = vi.fn().mockResolvedValue(null);
+    const save = vi.fn(async (value) => ({ id: "task-main", ...value }));
+    mocks.getTaskRepository.mockResolvedValue({
+      findOneBy,
+      create: vi.fn((value) => value),
+      save,
+    });
+
+    const { getAllProjects, deleteProject } = await import("@/desktop/main/services/projectService");
+
+    try {
+      // When
+      await getAllProjects();
+      const deletePromise = deleteProject(project.id);
+      await transactionStarted;
+      await vi.runAllTimersAsync();
+      releaseTransaction();
+      const result = await deletePromise;
+
+      // Then
+      expect(result).toBe(true);
+      expect(save).not.toHaveBeenCalled();
+      expect(findOneBy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
