@@ -12,7 +12,11 @@ import {
   type BackgroundSyncFailurePayload,
   type TaskPrMergedDetectedPayload,
 } from "@/lib/boardNotifier";
-import { installKanvibeHooks, scheduleKanvibeHooksInstall } from "@/lib/kanvibeHooksInstaller";
+import {
+  installKanvibeHookFiles,
+  scheduleKanvibeHooksInstall,
+  scheduleKanvibeHooksVerification,
+} from "@/lib/kanvibeHooksInstaller";
 import { execGit, pullCurrentBranch, remoteBranchExists } from "@/lib/gitOperations";
 import { detachSession } from "@/lib/terminal";
 
@@ -147,13 +151,28 @@ export function scheduleTaskHookInstall(
   });
 }
 
-async function installTaskHooksSafely(
+function scheduleTaskHookVerification(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+) {
+  scheduleKanvibeHooksVerification(targetPath, task.id, task.sshHost, {
+    onSuccess: () => {
+      broadcastBoardUpdate();
+    },
+    onFailure: (error) => {
+      reportTaskHookInstallFailure(targetPath, task, error, "hooks 백그라운드 검증 실패");
+    },
+  });
+}
+
+async function installTaskHookFilesSafely(
   targetPath: string,
   task: Pick<KanbanTask, "id" | "title" | "sshHost">,
   failureLogMessage: string,
 ) {
   try {
-    await installKanvibeHooks(targetPath, task.id, task.sshHost);
+    await installKanvibeHookFiles(targetPath, task.id, task.sshHost);
+    scheduleTaskHookVerification(targetPath, task);
   } catch (error) {
     reportTaskHookInstallFailure(targetPath, task, error, failureLogMessage);
   }
@@ -586,7 +605,7 @@ export async function createTask(input: CreateTaskInput): Promise<KanbanTask> {
   const saved = await repo.save(task);
 
   if (shouldInstallHooks && hookTargetPath) {
-    await installTaskHooksSafely(
+    await installTaskHookFilesSafely(
       hookTargetPath,
       saved,
       "새 태스크 hooks 동기 설치 실패",
@@ -820,7 +839,7 @@ export async function branchFromTask(
   const saved = await repo.save(task);
 
   if (session.worktreePath) {
-    await installTaskHooksSafely(
+    await installTaskHookFilesSafely(
       session.worktreePath,
       saved,
       "Hooks 설정 실패",
@@ -853,7 +872,7 @@ export async function connectTerminalSession(
   const workingDir = task.worktreePath || project.repoPath;
 
   try {
-    await installTaskHooksSafely(workingDir, {
+    await installTaskHookFilesSafely(workingDir, {
       id: task.id,
       title: task.title,
       sshHost: project.sshHost,

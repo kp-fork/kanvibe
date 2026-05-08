@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   removeSessionOnly: vi.fn(),
   detachSession: vi.fn(),
   installKanvibeHooks: vi.fn(),
+  installKanvibeHookFiles: vi.fn(),
+  scheduleKanvibeHooksVerification: vi.fn(),
   scheduleKanvibeHooksInstall: vi.fn(),
   broadcastBoardUpdate: vi.fn(),
   execGit: vi.fn(),
@@ -75,6 +77,8 @@ vi.mock("@/lib/terminal", () => ({
 
 vi.mock("@/lib/kanvibeHooksInstaller", () => ({
   installKanvibeHooks: mocks.installKanvibeHooks,
+  installKanvibeHookFiles: mocks.installKanvibeHookFiles,
+  scheduleKanvibeHooksVerification: mocks.scheduleKanvibeHooksVerification,
   scheduleKanvibeHooksInstall: mocks.scheduleKanvibeHooksInstall,
 }));
 
@@ -103,6 +107,8 @@ describe("kanbanService.createTask", () => {
     mocks.taskRepo.create.mockImplementation((value) => value);
     mocks.createSessionWithoutWorktree.mockResolvedValue({ sessionName: "repo-feature-remote" });
     mocks.installKanvibeHooks.mockResolvedValue(undefined);
+    mocks.installKanvibeHookFiles.mockResolvedValue(undefined);
+    mocks.scheduleKanvibeHooksVerification.mockImplementation(() => {});
     mocks.scheduleKanvibeHooksInstall.mockImplementation((
       targetPath: string,
       taskId: string,
@@ -150,7 +156,7 @@ describe("kanbanService.createTask", () => {
     });
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
       "/workspace/repo-worktrees/task-1",
       "task-1",
       null,
@@ -170,7 +176,7 @@ describe("kanbanService.createTask", () => {
       sessionName: "task-1",
     });
     let resolveInstall: () => void = () => {};
-    mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
+    mocks.installKanvibeHookFiles.mockImplementation(() => new Promise<void>((resolve) => {
       resolveInstall = resolve;
     }));
     mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
@@ -193,7 +199,7 @@ describe("kanbanService.createTask", () => {
     }
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
       "/workspace/repo-worktrees/task-1",
       "task-1",
       null,
@@ -219,7 +225,7 @@ describe("kanbanService.createTask", () => {
       sessionName: "task-1",
     });
     let resolveInstall: () => void = () => {};
-    mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
+    mocks.installKanvibeHookFiles.mockImplementation(() => new Promise<void>((resolve) => {
       resolveInstall = resolve;
     }));
     mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
@@ -242,7 +248,7 @@ describe("kanbanService.createTask", () => {
     }
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
       "/remote/repo-worktrees/task-1",
       "task-1",
       "remote-host",
@@ -269,7 +275,7 @@ describe("kanbanService.createTask", () => {
       worktreePath: "/workspace/repo-worktrees/task-1",
       sessionName: "task-1",
     });
-    mocks.installKanvibeHooks.mockRejectedValueOnce(new Error("codex config failed"));
+    mocks.installKanvibeHookFiles.mockRejectedValueOnce(new Error("codex config failed"));
     mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
 
     const { createTask } = await import("@/desktop/main/services/kanbanService");
@@ -305,7 +311,7 @@ describe("kanbanService.createTask", () => {
       worktreePath: "/remote/repo-worktrees/task-1",
       sessionName: "task-1",
     });
-    mocks.installKanvibeHooks.mockResolvedValue(undefined);
+    mocks.installKanvibeHookFiles.mockResolvedValue(undefined);
     mocks.taskRepo.save.mockImplementation(async (value) => ({ id: "task-1", ...value }));
 
     const { createTask } = await import("@/desktop/main/services/kanbanService");
@@ -319,7 +325,7 @@ describe("kanbanService.createTask", () => {
     });
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
       "/remote/repo-worktrees/task-1",
       "task-1",
       "remote-host",
@@ -349,7 +355,7 @@ describe("kanbanService.createTask", () => {
       sshHost: "remote-host",
     });
     let resolveInstall: () => void = () => {};
-    mocks.installKanvibeHooks.mockImplementation(() => new Promise<void>((resolve) => {
+    mocks.installKanvibeHookFiles.mockImplementation(() => new Promise<void>((resolve) => {
       resolveInstall = resolve;
     }));
     mocks.createSessionWithoutWorktree.mockResolvedValue({
@@ -366,7 +372,7 @@ describe("kanbanService.createTask", () => {
     }
 
     // Then
-    expect(mocks.installKanvibeHooks).toHaveBeenCalledWith(
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
       "/remote/repo__worktrees/feature-remote",
       "task-connect",
       "remote-host",
@@ -390,7 +396,7 @@ describe("kanbanService.createTask", () => {
       "remote-host",
       "/remote/repo__worktrees/feature-remote",
     );
-    expect(mocks.installKanvibeHooks.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.installKanvibeHookFiles.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.createSessionWithoutWorktree.mock.invocationCallOrder[0],
     );
     expect(mocks.scheduleKanvibeHooksInstall).not.toHaveBeenCalled();

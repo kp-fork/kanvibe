@@ -136,6 +136,24 @@ describe("kanvibeHooksInstaller", () => {
     expect(mockExecGit).not.toHaveBeenCalled();
   });
 
+  it("hook 파일 설치 API는 provider 검증을 기다리지 않는다", async () => {
+    // Given
+    const { installKanvibeHookFiles } = await import("@/lib/kanvibeHooksInstaller");
+
+    // When
+    await installKanvibeHookFiles("/repo", "task-1", null);
+
+    // Then
+    expect(mockSetupClaudeHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupGeminiHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupCodexHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockSetupOpenCodeHooks).toHaveBeenCalledWith("/repo", "task-1", "http://192.168.0.8:9736");
+    expect(mockGetClaudeHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetGeminiHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetCodexHooksStatus).not.toHaveBeenCalled();
+    expect(mockGetOpenCodeHooksStatus).not.toHaveBeenCalled();
+  });
+
   it("provider별 설치는 선택한 provider setup만 기다리고 다른 provider는 실행하지 않는다", async () => {
     // Given
     const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");

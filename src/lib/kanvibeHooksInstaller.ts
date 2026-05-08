@@ -27,6 +27,7 @@ import { quoteShellArgument, readTextFiles } from "@/lib/hostFileAccess";
 const HOOK_INSTALL_MAX_ATTEMPTS = 3;
 const HOOK_INSTALL_RETRY_DELAY_MS = 500;
 const activeHookInstallJobs = new Map<string, Promise<void>>();
+const activeHookFileInstallJobs = new Map<string, Promise<void>>();
 const scheduledHookInstallJobs = new Map<string, ScheduledHookInstallJob>();
 
 export type KanvibeHookProvider = "claude" | "gemini" | "codex" | "openCode";
@@ -65,6 +66,28 @@ export async function installKanvibeHooks(
     });
 
   activeHookInstallJobs.set(installKey, installJob);
+  return installJob;
+}
+
+export async function installKanvibeHookFiles(
+  targetPath: string,
+  taskId: string,
+  sshHost?: string | null,
+): Promise<void> {
+  const installKey = buildHookInstallKey(targetPath, taskId, sshHost, "all-files");
+  const activeJob = activeHookFileInstallJobs.get(installKey);
+  if (activeJob) {
+    return activeJob;
+  }
+
+  const installJob = runKanvibeHookFilesInstallWithRetry(targetPath, taskId, sshHost)
+    .finally(() => {
+      if (activeHookFileInstallJobs.get(installKey) === installJob) {
+        activeHookFileInstallJobs.delete(installKey);
+      }
+    });
+
+  activeHookFileInstallJobs.set(installKey, installJob);
   return installJob;
 }
 
@@ -125,11 +148,28 @@ export function scheduleKanvibeHooksInstall(
   }, options.delayMs ?? 0);
 }
 
+export function scheduleKanvibeHooksVerification(
+  targetPath: string,
+  taskId: string,
+  sshHost?: string | null,
+  options: HookInstallScheduleOptions = {},
+): void {
+  setTimeout(() => {
+    void verifyHookInstallation(targetPath, taskId, sshHost)
+      .then(() => {
+        runHookInstallCallback(() => options.onSuccess?.());
+      })
+      .catch((error) => {
+        runHookInstallCallback(() => options.onFailure?.(error));
+      });
+  }, options.delayMs ?? 0);
+}
+
 function buildHookInstallKey(
   targetPath: string,
   taskId: string,
   sshHost: string | null | undefined,
-  provider: KanvibeHookProvider | "all",
+  provider: KanvibeHookProvider | "all" | "all-files",
 ): string {
   return [provider, sshHost ?? "", targetPath, taskId].join("\0");
 }
@@ -189,6 +229,41 @@ async function runKanvibeHooksInstallWithRetry(
   }
 
   throw lastError instanceof Error ? lastError : new Error("hooks 설정 실패");
+}
+
+async function runKanvibeHookFilesInstallWithRetry(
+  targetPath: string,
+  taskId: string,
+  sshHost?: string | null,
+): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= HOOK_INSTALL_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await installKanvibeHookFilesOnce(targetPath, taskId, sshHost);
+      return;
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === HOOK_INSTALL_MAX_ATTEMPTS) {
+        throw error;
+      }
+
+      const retryDelayMs = HOOK_INSTALL_RETRY_DELAY_MS * attempt;
+      console.warn("[hooks] file install failed; retrying", {
+        targetPath,
+        taskId,
+        sshHost: sshHost ?? null,
+        attempt,
+        maxAttempts: HOOK_INSTALL_MAX_ATTEMPTS,
+        nextAttemptInMs: retryDelayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await waitForHookInstallRetry(retryDelayMs);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("hooks 파일 설정 실패");
 }
 
 async function runKanvibeHookProviderInstallWithRetry(
@@ -286,6 +361,15 @@ async function installKanvibeHooksOnce(
   taskId: string,
   sshHost?: string | null,
 ): Promise<void> {
+  await installKanvibeHookFilesOnce(targetPath, taskId, sshHost);
+  await verifyHookInstallation(targetPath, taskId, sshHost);
+}
+
+async function installKanvibeHookFilesOnce(
+  targetPath: string,
+  taskId: string,
+  sshHost?: string | null,
+): Promise<void> {
   const hookServerUrl = await getHookServerUrl(sshHost);
 
   if (!sshHost) {
@@ -305,8 +389,6 @@ async function installKanvibeHooksOnce(
 
     await setupRemoteKanvibeHooks(targetPath, taskId, hookServerUrl, sshHost);
   }
-
-  await verifyHookInstallation(targetPath, taskId, sshHost);
 }
 
 async function installKanvibeHookProviderOnce(
