@@ -41,18 +41,26 @@ const SSH_TRANSPORT_ERROR_PATTERNS = [
 const DEFAULT_REMOTE_SSH_TRANSPORT_FAILURE_COOLDOWN_MS = 5_000;
 const MAX_REMOTE_SSH_TRANSPORT_FAILURE_COOLDOWN_MS = 60_000;
 const FALLBACK_REMOTE_SSH_HOST_MAX_CONCURRENCY = 4;
-const MAX_REMOTE_SSH_HOST_MAX_CONCURRENCY = 16;
+const REMOTE_SSH_HOST_CONCURRENCY_PER_CORE = 4;
 const DEFAULT_REMOTE_SSH_COMMAND_TIMEOUT_MS = 45_000;
 const REMOTE_SSH_COMMAND_MAX_ATTEMPTS = 3;
 const REMOTE_SSH_CONTROLMASTER_SHUTDOWN_TIMEOUT_MS = 3_000;
 const REMOTE_COMMAND_EXIT_MARKER = "__KANVIBE_REMOTE_COMMAND_EXIT_7b3f6e5d__";
 const REMOTE_COMMAND_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const remoteSSHTransportFailures = new Map<string, { until: number; error: Error }>();
-const remoteSSHHostLimiters = new Map<string, {
-  active: number;
+// 실제 SSH 연결은 OpenSSH ControlMaster가 유지하고, 앱은 host별 shard lease와 대기열을 관리한다.
+const remoteSSHConnectionPools = new Map<string, RemoteSSHConnectionPool>();
+
+interface RemoteSSHConnectionPool {
+  activeConnections: number;
   queue: Array<() => void>;
-  availableShards: number[];
-}>();
+  availableShardIndexes: number[];
+}
+
+interface RemoteSSHConnectionLease {
+  controlMasterShardIndex: number;
+  release: () => void;
+}
 
 export interface ExecGitOptions {
   timeoutMs?: number;
@@ -119,23 +127,24 @@ function readPositiveInteger(value: string | undefined, fallback: number): numbe
 }
 
 function getRemoteSSHHostMaxConcurrency(): number {
+  const concurrencyLimit = getRemoteSSHHostConcurrencyLimit();
   return Math.min(
     readPositiveInteger(
       process.env.KANVIBE_REMOTE_SSH_HOST_MAX_CONCURRENCY,
-      getDefaultRemoteSSHHostMaxConcurrency(),
+      concurrencyLimit,
     ),
-    MAX_REMOTE_SSH_HOST_MAX_CONCURRENCY,
+    concurrencyLimit,
   );
 }
 
-function getDefaultRemoteSSHHostMaxConcurrency(): number {
+function getRemoteSSHHostConcurrencyLimit(): number {
   try {
-    const defaultConcurrency = availableParallelism() * 2;
-    if (!Number.isFinite(defaultConcurrency) || defaultConcurrency < 1) {
+    const availableCpuCount = availableParallelism();
+    if (!Number.isFinite(availableCpuCount) || availableCpuCount < 1) {
       return FALLBACK_REMOTE_SSH_HOST_MAX_CONCURRENCY;
     }
 
-    return Math.min(defaultConcurrency, MAX_REMOTE_SSH_HOST_MAX_CONCURRENCY);
+    return Math.floor(availableCpuCount) * REMOTE_SSH_HOST_CONCURRENCY_PER_CORE;
   } catch {
     return FALLBACK_REMOTE_SSH_HOST_MAX_CONCURRENCY;
   }
@@ -416,76 +425,79 @@ async function runLimitedRemoteCommand<T>(
   sshHost: string,
   operation: (controlMasterShardIndex: number) => Promise<T>,
 ): Promise<T> {
-  const slot = await acquireRemoteSSHSlot(sshHost);
+  const lease = await acquireRemoteSSHConnection(sshHost);
 
   try {
-    return await operation(slot.controlMasterShardIndex);
+    return await operation(lease.controlMasterShardIndex);
   } finally {
-    slot.release();
+    lease.release();
   }
 }
 
-function acquireRemoteSSHSlot(sshHost: string): Promise<{
-  controlMasterShardIndex: number;
-  release: () => void;
-}> {
-  let limiter = remoteSSHHostLimiters.get(sshHost);
-  if (!limiter) {
-    limiter = { active: 0, queue: [], availableShards: [] };
-    remoteSSHHostLimiters.set(sshHost, limiter);
-  }
+function acquireRemoteSSHConnection(sshHost: string): Promise<RemoteSSHConnectionLease> {
+  const connectionPool = getOrCreateRemoteSSHConnectionPool(sshHost);
 
   return new Promise((resolve) => {
     const start = () => {
-      const controlMasterShardIndex = acquireRemoteSSHControlMasterShard(limiter);
-      limiter.active += 1;
+      const controlMasterShardIndex = acquireRemoteSSHControlMasterShard(connectionPool);
+      connectionPool.activeConnections += 1;
       resolve({
         controlMasterShardIndex,
-        release: () => releaseRemoteSSHSlot(sshHost, limiter, controlMasterShardIndex),
+        release: () => releaseRemoteSSHConnection(sshHost, connectionPool, controlMasterShardIndex),
       });
     };
 
-    if (limiter.active < getRemoteSSHHostMaxConcurrency()) {
+    if (connectionPool.activeConnections < getRemoteSSHHostMaxConcurrency()) {
       start();
       return;
     }
 
-    limiter.queue.push(start);
+    connectionPool.queue.push(start);
   });
 }
 
+function getOrCreateRemoteSSHConnectionPool(sshHost: string): RemoteSSHConnectionPool {
+  let connectionPool = remoteSSHConnectionPools.get(sshHost);
+  if (!connectionPool) {
+    connectionPool = {
+      activeConnections: 0,
+      queue: [],
+      availableShardIndexes: [],
+    };
+    remoteSSHConnectionPools.set(sshHost, connectionPool);
+  }
+
+  return connectionPool;
+}
+
 function acquireRemoteSSHControlMasterShard(
-  limiter: { active: number; availableShards: number[] },
+  connectionPool: RemoteSSHConnectionPool,
 ): number {
-  const reusableShard = limiter.availableShards.shift();
+  const reusableShard = connectionPool.availableShardIndexes.shift();
   if (reusableShard !== undefined) {
     return reusableShard;
   }
 
-  return limiter.active;
+  return connectionPool.activeConnections;
 }
 
-function releaseRemoteSSHSlot(
+function releaseRemoteSSHConnection(
   sshHost: string,
-  limiter: {
-    active: number;
-    queue: Array<() => void>;
-    availableShards: number[];
-  },
+  connectionPool: RemoteSSHConnectionPool,
   controlMasterShardIndex: number,
 ): void {
-  limiter.active -= 1;
-  limiter.availableShards.push(controlMasterShardIndex);
-  limiter.availableShards.sort((left, right) => left - right);
+  connectionPool.activeConnections -= 1;
+  connectionPool.availableShardIndexes.push(controlMasterShardIndex);
+  connectionPool.availableShardIndexes.sort((left, right) => left - right);
 
-  const next = limiter.queue.shift();
+  const next = connectionPool.queue.shift();
   if (next) {
     next();
     return;
   }
 
-  if (limiter.active === 0) {
-    remoteSSHHostLimiters.delete(sshHost);
+  if (connectionPool.activeConnections === 0) {
+    remoteSSHConnectionPools.delete(sshHost);
   }
 }
 
