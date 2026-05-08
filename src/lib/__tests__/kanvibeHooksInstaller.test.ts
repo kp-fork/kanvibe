@@ -154,6 +154,78 @@ describe("kanvibeHooksInstaller", () => {
     expect(mockGetOpenCodeHooksStatus).not.toHaveBeenCalled();
   });
 
+  it("검증 스케줄러는 hook 파일을 다시 쓰지 않고 provider status만 확인한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      const onSuccess = vi.fn();
+      const onFailure = vi.fn();
+      mockGetClaudeHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+      mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+      mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
+
+      const { scheduleKanvibeHooksVerification } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      scheduleKanvibeHooksVerification("/remote/repo", "task-2", "remote-host", {
+        onSuccess,
+        onFailure,
+      });
+
+      // Then
+      expect(mockGetClaudeHooksStatus).not.toHaveBeenCalled();
+      expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+
+      await vi.runAllTimersAsync();
+
+      expect(mockGetClaudeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetGeminiHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetCodexHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+      expect(mockSetupClaudeHooks).not.toHaveBeenCalled();
+      expect(mockSetupGeminiHooks).not.toHaveBeenCalled();
+      expect(mockSetupCodexHooks).not.toHaveBeenCalled();
+      expect(mockSetupOpenCodeHooks).not.toHaveBeenCalled();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("검증 스케줄러는 provider 검증 실패를 failure callback으로 전달한다", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Given
+      const onSuccess = vi.fn();
+      const onFailure = vi.fn();
+      mockGetCodexHooksStatus.mockResolvedValue({ installed: false, hasConfigEntry: false });
+
+      const { scheduleKanvibeHooksVerification } = await import("@/lib/kanvibeHooksInstaller");
+
+      // When
+      scheduleKanvibeHooksVerification("/repo", "task-1", null, {
+        onSuccess,
+        onFailure,
+      });
+      await vi.runAllTimersAsync();
+
+      // Then
+      expect(onSuccess).not.toHaveBeenCalled();
+      expect(onFailure).toHaveBeenCalledTimes(1);
+      expect(onFailure.mock.calls[0][0]).toEqual(expect.any(Error));
+      expect((onFailure.mock.calls[0][0] as Error).message).toContain(
+        "hooks 검증 실패: Codex(hasConfigEntry)",
+      );
+      expect(mockSetupCodexHooks).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("provider별 설치는 선택한 provider setup만 기다리고 다른 provider는 실행하지 않는다", async () => {
     // Given
     const { installKanvibeHookProvider } = await import("@/lib/kanvibeHooksInstaller");

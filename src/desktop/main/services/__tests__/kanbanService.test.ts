@@ -161,6 +161,16 @@ describe("kanbanService.createTask", () => {
       "task-1",
       null,
     );
+    expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+      "/workspace/repo-worktrees/task-1",
+      "task-1",
+      null,
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onFailure: expect.any(Function),
+      }),
+    );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
   });
 
   it("worktree 태스크 생성은 hooks 설치 완료를 기다린 뒤 반환한다", async () => {
@@ -206,9 +216,25 @@ describe("kanbanService.createTask", () => {
     );
     expect(resolved).toBe(false);
     expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
 
     resolveInstall();
     await expect(resultPromise).resolves.toEqual(expect.objectContaining({ id: "task-1" }));
+    expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+      "/workspace/repo-worktrees/task-1",
+      "task-1",
+      null,
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onFailure: expect.any(Function),
+      }),
+    );
+    expect(mocks.installKanvibeHookFiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0],
+    );
+    expect(mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.broadcastBoardUpdate.mock.invocationCallOrder[0],
+    );
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
@@ -255,10 +281,27 @@ describe("kanbanService.createTask", () => {
     );
     expect(resolved).toBe(false);
     expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
 
     resolveInstall();
     await expect(resultPromise).resolves.toEqual(expect.objectContaining({ id: "task-1" }));
     expect(resolved).toBe(true);
+    expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+      "/remote/repo-worktrees/task-1",
+      "task-1",
+      "remote-host",
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onFailure: expect.any(Function),
+      }),
+    );
+    expect(mocks.installKanvibeHookFiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0],
+    );
+    expect(mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.broadcastBoardUpdate.mock.invocationCallOrder[0],
+    );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
@@ -295,6 +338,7 @@ describe("kanbanService.createTask", () => {
       taskTitle: "알림 회귀 수정",
       error: "codex config failed",
     });
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
     consoleErrorSpy.mockRestore();
   });
@@ -379,6 +423,7 @@ describe("kanbanService.createTask", () => {
     );
     expect(mocks.createSessionWithoutWorktree).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
 
     resolveInstall();
     const result = await resultPromise;
@@ -397,9 +442,108 @@ describe("kanbanService.createTask", () => {
       "/remote/repo__worktrees/feature-remote",
     );
     expect(mocks.installKanvibeHookFiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0],
+    );
+    expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+      "/remote/repo__worktrees/feature-remote",
+      "task-connect",
+      "remote-host",
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onFailure: expect.any(Function),
+      }),
+    );
+    expect(mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.createSessionWithoutWorktree.mock.invocationCallOrder[0],
     );
     expect(mocks.scheduleKanvibeHooksInstall).not.toHaveBeenCalled();
+    expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("기존 task에서 브랜치를 만들면 hooks 설치와 검증 예약 후 board update를 보낸다", async () => {
+    // Given
+    const task = {
+      id: "task-branch",
+      title: "원격 브랜치 생성",
+      projectId: null,
+      branchName: null,
+      baseBranch: null,
+      worktreePath: null,
+      sshHost: null,
+      sessionType: null,
+      sessionName: null,
+      status: "todo",
+    };
+    mocks.taskRepo.findOneBy.mockResolvedValue(task);
+    mocks.projectRepo.findOneBy.mockResolvedValue({
+      id: "project-remote",
+      repoPath: "/remote/repo",
+      defaultBranch: "main",
+      sshHost: "remote-host",
+    });
+    mocks.createWorktreeWithSession.mockResolvedValue({
+      worktreePath: "/remote/repo__worktrees/feature-from-task",
+      sessionName: "repo-feature-from-task",
+    });
+    let resolveInstall: () => void = () => {};
+    mocks.installKanvibeHookFiles.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveInstall = resolve;
+    }));
+    mocks.taskRepo.save.mockImplementation(async (value) => value);
+
+    const { branchFromTask } = await import("@/desktop/main/services/kanbanService");
+
+    // When
+    let resolved = false;
+    const resultPromise = branchFromTask(
+      "task-branch",
+      "project-remote",
+      "main",
+      "feature/from-task",
+      "zellij" as never,
+    ).then((result) => {
+      resolved = true;
+      return result;
+    });
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
+    }
+
+    // Then
+    expect(mocks.installKanvibeHookFiles).toHaveBeenCalledWith(
+      "/remote/repo__worktrees/feature-from-task",
+      "task-branch",
+      "remote-host",
+    );
+    expect(resolved).toBe(false);
+    expect(mocks.broadcastBoardUpdate).not.toHaveBeenCalled();
+    expect(mocks.scheduleKanvibeHooksVerification).not.toHaveBeenCalled();
+
+    resolveInstall();
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({
+      id: "task-branch",
+      projectId: "project-remote",
+      branchName: "feature/from-task",
+      sessionType: "zellij",
+      sessionName: "repo-feature-from-task",
+      status: "progress",
+    }));
+    expect(mocks.scheduleKanvibeHooksVerification).toHaveBeenCalledWith(
+      "/remote/repo__worktrees/feature-from-task",
+      "task-branch",
+      "remote-host",
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onFailure: expect.any(Function),
+      }),
+    );
+    expect(mocks.installKanvibeHookFiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0],
+    );
+    expect(mocks.scheduleKanvibeHooksVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.broadcastBoardUpdate.mock.invocationCallOrder[0],
+    );
+    expect(mocks.installKanvibeHooks).not.toHaveBeenCalled();
     expect(mocks.broadcastBoardUpdate).toHaveBeenCalledTimes(1);
   });
 
