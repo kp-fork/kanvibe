@@ -362,18 +362,31 @@ describe("kanvibeHooksInstaller", () => {
     }));
   });
 
-  it("원격 설치는 후속 검증을 기다리지 않고 반환한다", async () => {
-    const pendingVerification = new Promise(() => {});
-    mockGetClaudeHooksStatus.mockReturnValue(pendingVerification);
-    mockGetGeminiHooksStatus.mockReturnValue(pendingVerification);
-    mockGetCodexHooksStatus.mockReturnValue(pendingVerification);
-    mockGetOpenCodeHooksStatus.mockReturnValue(pendingVerification);
+  it("원격 설치는 SSH 기반 검증을 기다린 뒤 반환한다", async () => {
+    let resolveClaudeVerification: (value: { installed: true; hasSettingsEntry: true }) => void = () => {};
+    mockGetClaudeHooksStatus.mockReturnValue(new Promise((resolve) => {
+      resolveClaudeVerification = resolve;
+    }));
+    mockGetGeminiHooksStatus.mockResolvedValue({ installed: true, hasSettingsEntry: true });
+    mockGetCodexHooksStatus.mockResolvedValue({ installed: true, hasConfigEntry: true });
+    mockGetOpenCodeHooksStatus.mockResolvedValue({ installed: true, hasRegisteredPlugin: true });
 
     const { installKanvibeHooks } = await import("@/lib/kanvibeHooksInstaller");
 
-    await expect(Promise.race([
-      installKanvibeHooks("/remote/repo", "task-2", "remote-host").then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("timed-out"), 50)),
-    ])).resolves.toBe("resolved");
+    let resolved = false;
+    const installPromise = installKanvibeHooks("/remote/repo", "task-2", "remote-host").then(() => {
+      resolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockGetClaudeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetGeminiHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetCodexHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(mockGetOpenCodeHooksStatus).toHaveBeenCalledWith("/remote/repo", "task-2", "remote-host");
+    expect(resolved).toBe(false);
+
+    resolveClaudeVerification({ installed: true, hasSettingsEntry: true });
+    await installPromise;
+    expect(resolved).toBe(true);
   });
 });

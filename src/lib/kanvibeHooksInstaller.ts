@@ -228,18 +228,6 @@ async function installKanvibeHooksOnce(
     }
   }
 
-  if (sshHost) {
-    void logHookVerificationStatuses(targetPath, taskId, sshHost).catch((error) => {
-      console.warn("[hooks] remote verification failed", {
-        targetPath,
-        taskId,
-        sshHost,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    return;
-  }
-
   await logHookVerificationStatuses(targetPath, taskId, sshHost);
 }
 

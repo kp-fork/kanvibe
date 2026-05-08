@@ -142,22 +142,31 @@ export function scheduleTaskHookInstall(
       broadcastBoardUpdate();
     },
     onFailure: (error) => {
-      const errorMessage = getErrorMessage(error);
-
-      console.error("새 태스크 hooks 백그라운드 설치 실패:", {
-        taskId: task.id,
-        taskTitle: task.title,
-        targetPath,
-        sshHost: task.sshHost ?? null,
-        error: errorMessage,
-      });
-
-      broadcastTaskHookInstallFailed({
-        taskId: task.id,
-        taskTitle: task.title,
-        error: errorMessage,
-      });
+      reportTaskHookInstallFailure(targetPath, task, error, "새 태스크 hooks 백그라운드 설치 실패");
     },
+  });
+}
+
+function reportTaskHookInstallFailure(
+  targetPath: string,
+  task: Pick<KanbanTask, "id" | "title" | "sshHost">,
+  error: unknown,
+  logMessage: string,
+) {
+  const errorMessage = getErrorMessage(error);
+
+  console.error(`${logMessage}:`, {
+    taskId: task.id,
+    taskTitle: task.title,
+    targetPath,
+    sshHost: task.sshHost ?? null,
+    error: errorMessage,
+  });
+
+  broadcastTaskHookInstallFailed({
+    taskId: task.id,
+    taskTitle: task.title,
+    error: errorMessage,
   });
 }
 
@@ -565,11 +574,11 @@ export async function createTask(input: CreateTaskInput): Promise<KanbanTask> {
   const saved = await repo.save(task);
 
   if (shouldInstallHooks && hookTargetPath) {
-    scheduleTaskHookInstall(hookTargetPath, {
-      id: saved.id,
-      title: saved.title,
-      sshHost: saved.sshHost,
-    });
+    try {
+      await installKanvibeHooks(hookTargetPath, saved.id, saved.sshHost);
+    } catch (error) {
+      reportTaskHookInstallFailure(hookTargetPath, saved, error, "새 태스크 hooks 동기 설치 실패");
+    }
   }
 
   broadcastBoardUpdate();
