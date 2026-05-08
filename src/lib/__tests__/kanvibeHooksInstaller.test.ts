@@ -34,7 +34,7 @@ vi.mock("@/lib/codexHooksSetup", () => ({
   generatePermissionHookScript: vi.fn(() => "codex permission"),
   generatePreToolHookScript: vi.fn(() => "codex pre tool"),
   generateStopHookScript: vi.fn(() => "codex stop"),
-  upsertCodexConfigToml: vi.fn((content: string) => `${content.trimEnd()}\n[features]\ncodex_hooks = true\n`),
+  upsertCodexConfigToml: vi.fn((content: string) => `${content.trimEnd()}\n[features]\ncodex_hooks = true\nhooks = true\n`),
   upsertCodexHooksJson: vi.fn(() => JSON.stringify({ hooks: { UserPromptSubmit: [{}], PermissionRequest: [{}], PreToolUse: [{}], Stop: [{}] } }, null, 2)),
   PROMPT_HOOK_SCRIPT_NAME: "kanvibe-prompt-hook.sh",
   PERMISSION_HOOK_SCRIPT_NAME: "kanvibe-permission-hook.sh",
@@ -521,7 +521,8 @@ describe("kanvibeHooksInstaller", () => {
     const configContent = extractWrittenContent(mockExecGit.mock.calls, "/remote/repo/.codex/config.toml");
     expect(configContent).toContain('model = "gpt-5"');
     expect(configContent).toContain("[features]");
-    expect(configContent).toContain("codex_hooks = true");
+    expect(configContent).toMatch(/^codex_hooks = true$/m);
+    expect(configContent).toMatch(/^hooks = true$/m);
 
     const hooksContent = extractWrittenContent(mockExecGit.mock.calls, "/remote/repo/.codex/hooks.json");
     expect(hooksContent).toContain("UserPromptSubmit");

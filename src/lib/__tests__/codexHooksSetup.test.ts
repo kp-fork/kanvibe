@@ -21,14 +21,26 @@ describe("codexHooksSetup", () => {
   });
 
   describe("upsertCodexConfigToml", () => {
-    it("should enable codex_hooks under the features table", () => {
+    it("should enable both codex hook feature flags under the features table", () => {
       const content = 'model = "gpt-5"\n[features]\nfast_mode = true\n';
 
       const updated = upsertCodexConfigToml(content);
 
       expect(updated).toContain("[features]");
       expect(updated).toContain("fast_mode = true");
-      expect(updated).toContain("codex_hooks = true");
+      expect(updated).toMatch(/^codex_hooks = true$/m);
+      expect(updated).toMatch(/^hooks = true$/m);
+    });
+
+    it("should keep the legacy codex_hooks flag and add hooks", () => {
+      const content = 'model = "gpt-5"\n[features]\ncodex_hooks = false\nfast_mode = true\n';
+
+      const updated = upsertCodexConfigToml(content);
+
+      expect(updated).toContain("[features]");
+      expect(updated).toContain("fast_mode = true");
+      expect(updated).toMatch(/^codex_hooks = true$/m);
+      expect(updated).toMatch(/^hooks = true$/m);
     });
 
     it("should remove the legacy kanvibe notify entry", () => {
@@ -38,7 +50,8 @@ describe("codexHooksSetup", () => {
 
       expect(updated).not.toContain('notify = [".codex/hooks/kanvibe-notify-hook.sh"]');
       expect(updated).toContain("[features]");
-      expect(updated).toContain("codex_hooks = true");
+      expect(updated).toMatch(/^codex_hooks = true$/m);
+      expect(updated).toMatch(/^hooks = true$/m);
     });
   });
 
@@ -86,7 +99,8 @@ describe("codexHooksSetup", () => {
 
       const configContent = await readFile(join(repoPath, ".codex", "config.toml"), "utf-8");
       expect(configContent).toContain("[features]");
-      expect(configContent).toContain("codex_hooks = true");
+      expect(configContent).toMatch(/^codex_hooks = true$/m);
+      expect(configContent).toMatch(/^hooks = true$/m);
 
       const hooksContent = await readFile(join(repoPath, ".codex", "hooks.json"), "utf-8");
       expect(hooksContent).toContain('"UserPromptSubmit"');
@@ -131,7 +145,8 @@ describe("codexHooksSetup", () => {
       const configContent = await readFile(join(repoPath, ".codex", "config.toml"), "utf-8");
       expect(configContent).not.toContain('notify = [".codex/hooks/kanvibe-notify-hook.sh"]');
       expect(configContent).toContain("[features]");
-      expect(configContent).toContain("codex_hooks = true");
+      expect(configContent).toMatch(/^codex_hooks = true$/m);
+      expect(configContent).toMatch(/^hooks = true$/m);
     });
   });
 
