@@ -74,7 +74,9 @@ describe("ReleaseUpdateDialog", () => {
 
     render(<ReleaseUpdateDialog />);
 
-    expect(await screen.findByRole("dialog")).toBeTruthy();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeTruthy();
+    expect(dialog.closest("[data-shortcut-capture='true']")).toBeTruthy();
     expect(screen.getByText("common.releaseUpdate.title:1.1.0")).toBeTruthy();
     expect(screen.getByText("KanVibe 1.1.0")).toBeTruthy();
     expect(screen.getByText("Release notes")).toBeTruthy();

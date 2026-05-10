@@ -1,12 +1,14 @@
 <div align="center">
 
+<img src="./docs/images/readme/kanvibe.png" alt="KanVibe app icon" width="120">
+
 # KanVibe
 
-**AI Agent Task Management Kanban Board**
+**Keyboard-first Kanban workspace for AI coding agents**
 
-A web-based terminal Kanban board for managing AI coding agent (Claude Code, Gemini CLI, Codex CLI, etc.) tasks in real-time.
-Monitor tmux/zellij sessions directly in your browser while tracking task progress on a drag & drop Kanban board.
-Automatically track task status via [AI Agent Hooks](#ai-agent-hooks---automatic-status-tracking) — no manual updates needed.
+KanVibe keeps AI coding work out of scattered terminal tabs. Track branch-based tasks on a real-time Kanban board, open each task's tmux/zellij session in the browser or desktop app, and let Claude Code, Gemini CLI, Codex CLI, and OpenCode hooks move tasks through the workflow automatically.
+
+Use shortcuts for project filters, task search, notifications, task detail panels, and common task actions without losing terminal focus.
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/rookedsysc)
 
@@ -18,14 +20,22 @@ Automatically track task status via [AI Agent Hooks](#ai-agent-hooks---automatic
 
 <div align="center">
 
-[![▶ Watch Demo on YouTube](https://img.youtube.com/vi/8JTrvd3T_Z0/maxresdefault.jpg)](https://www.youtube.com/watch?v=8JTrvd3T_Z0)
+<img src="./docs/images/readme/kanvibe-main.png" alt="KanVibe Kanban board" width="100%">
 
-**▶ [Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
+**[Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
 
 <table>
   <tr>
-    <td width="50%"><img src="./docs/images/detail-page.png" alt="Kanban Board" width="100%"></td>
-    <td width="50%"><img src="./docs/images/detail-page.png" alt="Task Detail & Terminal" width="100%"></td>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-detail.png" alt="Task detail terminal workspace" width="100%"></td>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-detail-shortcut.png" alt="Task detail shortcut panel" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-search-shortcut.png" alt="Quick task search shortcut" width="100%"></td>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-project-search-shortcut.png" alt="Project filter shortcut" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-notification-shortcut.png" alt="Notification shortcut panel" width="100%"></td>
+    <td width="50%"><img src="./docs/images/readme/kanvibe-quick-action-shortcut.png" alt="Quick task action shortcut" width="100%"></td>
   </tr>
 </table>
 
@@ -90,7 +100,7 @@ pnpm dist
 
 This builds the renderer bundle, compiles the desktop main process into `build/main`, generates the bundled seed database, and packages a desktop app through Electron Builder.
 
-- macOS output: `dist/*.dmg`, `dist/*.zip`
+- macOS output: `dist/*.dmg`
 - Homebrew distribution: use the generated DMG artifact in a custom Homebrew Cask tap
 - Homebrew template: `distribution/homebrew/kanvibe.rb.template`
 
@@ -147,34 +157,33 @@ Each pane can run a custom command (e.g., `vim`, `htop`, `lazygit`, test runner,
 
 ## Features
 
-### Kanban Board
+### Real-Time Kanban Board
 - 5-status task management (TODO / PROGRESS / PENDING / REVIEW / DONE)
-- Custom task ordering with drag & drop
-- Multi-project filtering
-- Board page find with `Cmd/Ctrl+F` for visible project/task text
-- Global quick search for task detail pages by branch or project name
-- Done column pagination
-- Real-time WebSocket updates
+- Drag & drop task ordering with project colors, priority markers, PR badges, and session labels
+- Multi-project filtering with keyboard search for visible project and task text
+- Done column pagination for long-running projects
+- Real-time WebSocket updates across browser and desktop windows
 
-### Git Worktree Integration
-- Automatic git worktree creation when a branch-based task is created
-- Worktree scanning: existing branches are auto-registered as TODO tasks
-- Automatic cleanup (branch + worktree + session) when task moves to DONE
-- Project deletion from settings only removes KanVibe database records for that project and its tasks; existing branches and worktrees remain untouched
+### Branch-Based Task Workspace
+- Create branch TODOs that automatically prepare a git worktree and terminal session
+- Scan existing worktree branches and register them as TODO tasks
+- Open each task into a dedicated terminal workspace with task metadata, hook controls, chat, and PR actions in the side dock
+- Move a task to DONE to clean up its branch, worktree, and terminal session automatically
+- Delete a project from settings without touching existing git branches, worktrees, or files on disk
 
 ### Terminal Sessions (tmux / zellij)
 - **tmux** and **zellij** are both supported as terminal multiplexers
-- Browser-based terminal via xterm.js + WebSocket
-- SSH remote terminal support (reads `~/.ssh/config`)
+- Browser-based terminal streaming through xterm.js and WebSocket
+- SSH remote terminal support that reads `~/.ssh/config`
 - Non-interactive remote SSH commands reuse an app-local ControlMaster socket pool under `~/.kanvibe`, with per-host concurrency capped at 4x available CPU cores
 - Remote terminal attach executes tmux/zellij directly over SSH; trusted X11 forwarding (`ssh -Y`) is requested only when local `DISPLAY`, remote `X11Forwarding`, and `xauth` are available
 - Nerd Font rendering support
 
-### Quick Task Search
-- Open a global search dialog from the configured keyboard shortcut
-- Search existing task detail pages by branch name or project name
-- Distinguish local tasks from SSH remote tasks directly in search results
-- Configure the shortcut in **Project Settings** → **Detail Page**
+### Keyboard-First Controls
+- Open quick task search by branch or project name from anywhere
+- Filter projects, inspect notifications, and trigger task actions without leaving the board
+- Use numbered detail shortcuts to switch task info, status/hooks, AI chat, PR, and other dock panels before keystrokes reach the terminal
+- Create a branch TODO directly from quick search with the configured shortcut
 
 ### Keyboard Shortcuts
 
@@ -276,13 +285,6 @@ Setup: Browser will prompt for permission on first visit. Configure filters in *
 ### GitHub-style Diff View
 
 Review code changes directly in the browser with a GitHub-style diff viewer. Click the **Diff** badge on the task detail page to see all modified files compared to the base branch.
-
-<table>
-  <tr>
-    <td width="30%"><img src="./docs/images/diff-view-button.png" alt="Diff Badge on Task Detail" width="100%"></td>
-    <td width="70%"><img src="./docs/images/diff-view.png" alt="Diff View Page" width="100%"></td>
-  </tr>
-</table>
 
 - File tree sidebar with changed file count
 - Inline diff viewer powered by Monaco Editor

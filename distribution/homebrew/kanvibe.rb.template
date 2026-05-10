@@ -1,5 +1,5 @@
 cask "kanvibe" do
-  version "0.1.0"
+  version "REPLACE_WITH_VERSION"
   sha256 "REPLACE_WITH_DMG_SHA256"
 
   url "https://github.com/rookedsysc/kanvibe/releases/download/v#{version}/KanVibe-#{version}.dmg"

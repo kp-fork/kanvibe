@@ -28,7 +28,6 @@ mac:
   icon: resources/icon.icns
   target:
     - dmg
-    - zip
 
 dmg:
   icon: resources/icon.icns

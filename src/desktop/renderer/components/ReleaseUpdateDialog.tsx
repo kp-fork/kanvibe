@@ -147,7 +147,11 @@ export default function ReleaseUpdateDialog() {
   }
 
   return (
-    <div data-terminal-focus-blocker="true" className="fixed inset-0 z-[540] flex items-center justify-center bg-bg-overlay px-4 py-8">
+    <div
+      data-shortcut-capture="true"
+      data-terminal-focus-blocker="true"
+      className="fixed inset-0 z-[540] flex items-center justify-center bg-bg-overlay px-4 py-8"
+    >
       <button
         type="button"
         aria-label={t("dismissOverlay")}
