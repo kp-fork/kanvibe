@@ -45,6 +45,14 @@ export function dismissDoneAlert(): Promise<void> {
   return invokeAndRefresh("dismissDoneAlert");
 }
 
+export function getReleaseUpdateDismissedVersions(): Promise<string[]> {
+  return invokeDesktop("appSettings", "getReleaseUpdateDismissedVersions");
+}
+
+export function dismissReleaseUpdateVersion(version: string): Promise<void> {
+  return invokeAndRefresh("dismissReleaseUpdateVersion", version);
+}
+
 export function getNotificationSettings(): Promise<{ isEnabled: boolean; enabledStatuses: string[] }> {
   return invokeDesktop("appSettings", "getNotificationSettings");
 }

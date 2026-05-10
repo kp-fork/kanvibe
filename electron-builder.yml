@@ -32,6 +32,6 @@ mac:
 
 dmg:
   icon: resources/icon.icns
-  artifactName: "kanvibe.${ext}"
+  artifactName: "KanVibe-${version}.${ext}"
 
 publish: null

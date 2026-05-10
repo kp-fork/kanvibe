@@ -5,6 +5,7 @@ import { BoardCommandProvider } from "@/desktop/renderer/components/BoardCommand
 import BoardEventAlert from "@/desktop/renderer/components/BoardEventAlert";
 import BackgroundSyncReviewDialog from "@/desktop/renderer/components/BackgroundSyncReviewDialog";
 import NotificationListener from "@/desktop/renderer/components/NotificationListener";
+import ReleaseUpdateDialog from "@/desktop/renderer/components/ReleaseUpdateDialog";
 import TaskQuickSearchDialog from "@/desktop/renderer/components/TaskQuickSearchDialog";
 import { DEFAULT_LOCALE, getSafeLocale, isSupportedLocale, messagesByLocale } from "@/desktop/renderer/utils/locales";
 import { triggerDesktopRefresh } from "@/desktop/renderer/utils/refresh";
@@ -87,6 +88,7 @@ function LocaleShell() {
       <BoardCommandProvider>
         <TaskQuickSearchDialog />
         <NotificationListener />
+        <ReleaseUpdateDialog />
         <BoardEventAlert />
         <BackgroundSyncReviewDialog />
         <Outlet />

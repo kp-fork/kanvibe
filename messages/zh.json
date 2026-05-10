@@ -52,6 +52,14 @@
       "worktreeFailure": "Worktree 同步失败",
       "emptyMerged": "本次检查中没有需要移动到 Done 的已合并 PR 任务。",
       "emptyRegistered": "本次检查中没有新注册的 worktree。"
+    },
+    "releaseUpdate": {
+      "eyebrow": "新版本",
+      "title": "KanVibe {version} 可用",
+      "emptyBody": "此版本没有提供发布说明。",
+      "viewRelease": "查看版本",
+      "dontShowVersionAgain": "不再显示此版本",
+      "dismissOverlay": "关闭更新对话框"
     }
   },
   "board": {

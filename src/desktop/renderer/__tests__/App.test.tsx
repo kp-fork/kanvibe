@@ -51,6 +51,10 @@ vi.mock("@/desktop/renderer/components/NotificationListener", () => ({
   default: () => <div>notification listener</div>,
 }));
 
+vi.mock("@/desktop/renderer/components/ReleaseUpdateDialog", () => ({
+  default: () => <div>release update dialog</div>,
+}));
+
 vi.mock("@/desktop/renderer/components/BoardEventAlert", () => ({
   default: () => <div>board event alert</div>,
 }));

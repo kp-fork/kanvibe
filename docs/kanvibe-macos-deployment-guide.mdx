@@ -1,0 +1,494 @@
+# KanVibe macOS DMG, Apple notarization, Homebrew Cask 배포 가이드
+
+## 개요
+
+KanVibe의 macOS 공개 배포는 `Developer ID Application` 인증서로 앱을 서명하고, Apple notarization을 통과한 DMG를 GitHub Release에 올린 뒤, Homebrew Cask가 그 Release asset URL과 `sha256`을 가리키게 만드는 흐름이 가장 단순합니다.
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 Mac App Store 밖에서 배포되는 앱을 Gatekeeper가 확인할 수 있도록 Developer ID 인증서와 notarization을 사용한다고 설명합니다.
+
+이 가이드에서 말하는 "Apple 심사"는 Homebrew/DMG 배포에 필요한 Apple notarization입니다. notarization은 Developer ID로 서명된 macOS 소프트웨어를 Apple notary service에 제출해 악성 코드와 서명 문제를 자동 검사받는 절차입니다.
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 notary service가 Developer ID로 서명된 소프트웨어를 자동으로 스캔하고, 준비가 끝나면 Gatekeeper가 확인할 ticket을 부여한다고 안내합니다.
+
+작성 기준은 2026-05-10입니다. Apple, Electron Builder, Homebrew 정책은 바뀔 수 있으므로 실제 릴리스 전에는 링크된 공식 문서를 다시 확인합니다.
+
+## 현재 KanVibe 기준에서 먼저 정리할 점
+
+현재 프로젝트의 `package.json`은 Node 24 계열과 `pnpm dist:deploy` 배포 스크립트를 기준으로 합니다. `dist:deploy`는 `.env`를 읽고 `pnpm dist` 빌드 후 최종 DMG를 Apple notarization에 제출합니다.
+
+> 프로젝트 기준: [`package.json`](../package.json)의 `engines.node`는 `24.x`이고, `dist` script는 `pnpm db:prepare && pnpm build && pnpm rebuild:native:electron && electron-builder --mac dmg zip`입니다.
+
+현재 작업트리의 `electron-builder.yml`은 DMG 파일명을 `KanVibe-${version}.dmg`로 만들도록 맞춰져 있고, Homebrew Cask 템플릿도 `KanVibe-#{version}.dmg`를 다운로드합니다.
+
+> 프로젝트 기준: [`electron-builder.yml`](../electron-builder.yml)의 `dmg.artifactName`은 현재 `KanVibe-${version}.${ext}`이고, [`distribution/homebrew/kanvibe.rb.template`](../distribution/homebrew/kanvibe.rb.template)의 URL은 `KanVibe-#{version}.dmg`를 가리킵니다.
+
+배포용 파일명 규칙은 아래처럼 유지합니다.
+
+```yml
+dmg:
+  icon: resources/icon.icns
+  artifactName: "KanVibe-${version}.${ext}"
+```
+
+> [Common Configuration](https://www.electron.build/configuration.html)는 `artifactName` 기본 템플릿이 제품명, 버전, 확장자를 포함하는 형식이라고 설명합니다.
+
+## 전체 배포 흐름
+
+| 단계 | 목적 | 산출물 |
+| --- | --- | --- |
+| Apple Developer 가입 | Developer ID 인증서와 App Store Connect API Key를 만들 수 있는 팀 확보 | Apple Developer Program membership |
+| Developer ID 인증서 발급 | Mac App Store 밖 배포용 앱 서명 | `Developer ID Application: ...` keychain identity |
+| App Store Connect API Key 발급 | `pnpm dist:deploy`의 `notarytool` 인증 | `AuthKey_XXXXXXXXXX.p8`, Key ID, Issuer ID |
+| KanVibe 빌드 | Electron 앱, DMG, ZIP 생성 | `dist/KanVibe-${VERSION}.dmg`, `dist/*.zip` |
+| Apple notarization | Gatekeeper 통과를 위한 자동 심사 | accepted notarization ticket |
+| GitHub Release | Homebrew가 받을 고정 다운로드 URL 제공 | `v${VERSION}` release assets |
+| Homebrew Cask 배포 | `brew install --cask` 설치 경로 제공 | `Casks/kanvibe.rb` |
+
+> [Adding Software to Homebrew](https://docs.brew.sh/Adding-Software-to-Homebrew)는 Cask의 `url`이 `.dmg`, `.zip`, `.tgz` 같은 앱 archive를 가리키고, `sha256`은 다운로드 파일의 SHA-256 값이라고 설명합니다.
+
+## Apple Developer Program 가입
+
+KanVibe를 Homebrew로 공개 배포하려면 Apple Developer Program 가입이 사실상 필요합니다. 가입 없이도 내부 테스트용 빌드는 가능하지만, Developer ID 인증서와 notarization 없는 공개 DMG는 Gatekeeper에서 막히거나 강한 경고를 유발합니다.
+
+> [Program enrollment](https://developer.apple.com/help/account/membership/program-enrollment)는 앱을 배포하려면 Apple Developer Program에 가입할 수 있고, 가입에는 2단계 인증이 켜진 Apple Account가 필요하다고 안내합니다.
+
+개인 또는 1인 사업자로 가입하면 App Store 판매자 이름에 개인 법적 이름이 표시됩니다. 회사나 단체로 가입하면 법인명, D-U-N-S Number, 법적 계약 권한, 조직 도메인 이메일, 공개 웹사이트가 필요합니다.
+
+> [Program enrollment](https://developer.apple.com/help/account/membership/program-enrollment)는 조직 가입 시 법인 상태, D-U-N-S Number, 계약 권한, 업무용 이메일, 공개 웹사이트를 확인한다고 안내합니다.
+
+연회비는 Apple Developer Program 기준 99 USD입니다. 지역에 따라 현지 통화와 세금이 적용될 수 있습니다.
+
+> [Program enrollment](https://developer.apple.com/help/account/membership/program-enrollment)는 Apple Developer Program 연회비가 99 USD이며 지역별 통화로 표시될 수 있다고 안내합니다.
+
+개인 가입은 Apple Developer 앱에서 진행하는 편이 가장 쉽습니다. iPhone, iPad 또는 지원되는 Mac에서 Apple Developer 앱을 열고 Account 탭에서 로그인한 뒤 `Enroll Now`를 진행합니다.
+
+> [Enrolling, verifying, and renewing with the Apple Developer app](https://developer.apple.com/help/account/membership/enrolling-in-the-app)는 Apple Developer 앱에서 Account 탭, Apple Account 로그인, 계약 동의, `Enroll Now` 순서로 가입을 시작한다고 안내합니다.
+
+가입 후 반드시 확인할 항목은 다음과 같습니다.
+
+- Apple Developer 계정의 Team ID
+- Account Holder 또는 Admin 권한
+- App Store Connect의 Business/Agreements 미동의 항목
+- Apple Developer Program membership 활성 상태
+- macOS 빌드 머신의 Xcode 설치 상태
+
+> [Add a new app](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app/)는 Account Holder가 최신 계약에 서명하지 않으면 앱 레코드를 추가할 수 없다고 안내합니다.
+
+## Developer ID 인증서 발급
+
+Homebrew/DMG 배포는 Mac App Store 배포가 아니므로 `Developer ID Application` 인증서가 필요합니다. DMG 내부의 `KanVibe.app`을 이 인증서로 서명해야 합니다.
+
+> [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)는 Mac App Store 밖에서 다운로드되는 Mac 소프트웨어에는 Developer ID 인증서를 만들고 Apple notarization에 제출할 수 있다고 설명합니다.
+
+KanVibe Homebrew/DMG 배포에 필요한 인증서는 다음 하나입니다.
+
+| 인증서 | 사용 시점 | KanVibe 기본 필요 여부 |
+| --- | --- | --- |
+| `Developer ID Application` | DMG/ZIP 안의 `.app` 서명 | 필요 |
+
+> [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)는 `Developer ID Application`이 Mac app 서명용 인증서라고 설명합니다.
+
+발급 절차는 다음과 같습니다.
+
+1. macOS에서 Keychain Access를 엽니다.
+2. 메뉴에서 `Certificate Assistant` > `Request a Certificate From a Certificate Authority`를 선택합니다.
+3. Apple Developer 계정 이메일과 이름을 입력하고 `Saved to disk`로 CSR 파일을 만듭니다.
+4. Apple Developer 웹의 `Certificates, Identifiers & Profiles` > `Certificates`로 이동합니다.
+5. `+` 버튼을 누르고 `Developer ID` > `Developer ID Application`을 선택합니다.
+6. CSR 파일을 업로드하고 `.cer` 파일을 다운로드합니다.
+7. 다운로드한 `.cer`를 더블클릭해 Keychain에 설치합니다.
+8. `My Certificates`에서 private key가 함께 붙어 있는지 확인합니다.
+
+> [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)는 `Certificates, Identifiers & Profiles`에서 Developer ID를 선택하고 CSR을 업로드한 뒤 `.cer` 파일을 다운로드해 Keychain에 설치한다고 안내합니다.
+
+Keychain에서 서명 identity가 보이는지 확인합니다.
+
+```bash
+security find-identity -v -p codesigning | grep "Developer ID Application"
+```
+
+출력 예시는 다음과 같습니다.
+
+```text
+1) ABCDEF1234567890 "Developer ID Application: Your Name (TEAMID12345)"
+```
+
+Electron Builder는 macOS 개발 머신의 keychain에 적절한 identity가 있으면 자동으로 사용할 수 있습니다. KanVibe의 `pnpm dist:deploy`는 `.env`의 `CSC_NAME`이 실제 keychain identity에 있는지 먼저 확인합니다.
+
+> [MacOS](https://www.electron.build/code-signing-mac)는 macOS code signing을 지원하고, macOS 개발 머신에서는 keychain의 적절한 identity를 자동으로 사용할 수 있다고 설명합니다.
+
+## App Store Connect API Key 발급과 등록
+
+KanVibe의 `pnpm dist:deploy`는 `.env`에 있는 App Store Connect API Key 값으로 최종 DMG를 Apple notarization에 제출합니다. 필요한 값은 세 가지입니다.
+
+- `.p8` private key 파일 경로
+- Key ID
+- Issuer ID
+
+> [electron builder.Interface.MacConfiguration](https://www.electron.build/electron-builder.interface.macconfiguration)는 notarization을 활성화하려면 `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` 조합을 environment variables로 지정할 수 있다고 설명합니다.
+
+먼저 App Store Connect API 접근을 활성화합니다.
+
+1. App Store Connect에 Account Holder로 로그인합니다.
+2. `Users and Access` > `Integrations`로 이동합니다.
+3. `App Store Connect API`에서 `Request Access`를 누릅니다.
+4. 약관에 동의하고 제출합니다.
+5. 승인 후 Team Key를 생성합니다.
+
+> [App Store Connect API](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/)는 Account Holder가 `Users and Access` > `Integrations`에서 API 접근을 요청해야 한다고 안내합니다.
+
+Team API Key 생성 절차는 다음과 같습니다.
+
+1. `Users and Access` > `Integrations`로 이동합니다.
+2. `Team Keys`를 선택합니다.
+3. `Generate API Key` 또는 `+` 버튼을 누릅니다.
+4. 이름을 입력합니다. 예: `KanVibe Notarization`
+5. Access role을 선택합니다. 최소 권한으로 시작하되 notarization이 실패하면 권한을 조정합니다.
+6. 생성 후 Key ID와 Issuer ID를 기록합니다.
+7. `.p8` private key를 한 번만 다운로드합니다.
+
+> [App Store Connect API](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/)는 Team Key 생성에 Account Holder 또는 Admin 권한이 필요하고, 생성 후 이름과 access level은 수정할 수 없다고 안내합니다.
+
+notarization 자동화에는 Team Key를 사용합니다. Individual API Key는 사용자 권한에 묶이고 일부 provisioning/notaryTool 용도에 제한이 있으므로 KanVibe 배포 자동화의 기본 방식으로 사용하지 않습니다.
+
+> [Creating API Keys for App Store Connect API](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api)는 Team Key와 Individual Key를 구분하고, private key를 안전하게 보관하라고 안내합니다.
+
+다운로드한 `.p8`는 repository 밖에 보관합니다.
+
+```bash
+mkdir -p "$HOME/.secrets/apple"
+chmod 700 "$HOME/.secrets/apple"
+mv "$HOME/Downloads/AuthKey_XXXXXXXXXX.p8" "$HOME/.secrets/apple/AuthKey_XXXXXXXXXX.p8"
+chmod 600 "$HOME/.secrets/apple/AuthKey_XXXXXXXXXX.p8"
+```
+
+> [App Store Connect API](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/)는 API key가 private이고 한 번만 다운로드할 수 있으므로 다운로드 후 안전하게 보관하라고 안내합니다.
+
+`.env.example`을 `.env`로 복사하고 실제 값을 채웁니다. `.env`는 이미 `.gitignore` 대상이므로 commit하지 않습니다.
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+CSC_NAME="Developer ID Application: Your Name (TEAMID)"
+APPLE_API_KEY="/Users/you/.secrets/apple/AuthKey_XXXXXXXXXX.p8"
+APPLE_API_KEY_ID="XXXXXXXXXX"
+APPLE_API_ISSUER="00000000-0000-0000-0000-000000000000"
+```
+
+`CSC_NAME`은 macOS 개발 머신의 login keychain에서 가져올 code signing certificate 이름입니다. `pnpm dist:deploy`는 이 값이 `security find-identity -v -p codesigning` 결과에 실제로 있는지 먼저 검사합니다.
+
+> [Setup](https://www.electron.build/code-signing.html)는 `CSC_NAME`을 login keychain에서 가져올 macOS 전용 certificate 이름으로 설명하고, 여러 identity가 있는 개발 머신에서 유용하다고 안내합니다.
+
+단, `CSC_NAME`은 identity 선택값일 뿐입니다. 실제 `Developer ID Application` 인증서와 private key는 여전히 macOS Keychain에 설치되어 있어야 합니다. `.env`만 만든다고 signing identity가 생기지는 않습니다.
+
+> [MacOS](https://www.electron.build/code-signing-mac)는 macOS 개발 머신에서는 keychain의 유효한 identity가 자동으로 사용될 수 있고, `Developer ID Application` 인증서는 Mac app 서명에 사용된다고 설명합니다.
+
+`APPLE_API_KEY`는 `.p8` 파일 내용이 아니라 파일 시스템 경로입니다.
+
+> [@electron/notarize NotaryToolApiKeyCredentials](https://packages.electronjs.org/notarize/main/interfaces/NotaryToolApiKeyCredentials.html)는 `appleApiKey`를 App Store Connect API key의 `.p8` private key 파일 경로로 설명합니다.
+
+`pnpm dist:deploy`는 `.env`를 직접 읽습니다. shell에서 `source .env`를 실행할 필요가 없습니다.
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 custom build workflow에서 `xcrun notarytool`로 업로드하고 `xcrun stapler`로 ticket을 붙일 수 있다고 안내합니다.
+
+## KanVibe 빌드 설정 점검
+
+배포 전에는 `electron-builder.yml`의 파일명 규칙과 Cask URL 규칙을 반드시 맞춥니다. 이 가이드는 아래 규칙을 기준으로 합니다.
+
+```yml
+appId: com.kanvibe.desktop
+productName: KanVibe
+
+mac:
+  icon: resources/icon.icns
+  target:
+    - dmg
+    - zip
+
+dmg:
+  icon: resources/icon.icns
+  artifactName: "KanVibe-${version}.${ext}"
+```
+
+Electron Builder의 `hardenedRuntime` 기본값은 `true`입니다. notarization은 Hardened Runtime이 켜진 서명을 전제로 두고 진행하는 것이 맞습니다.
+
+> [electron builder.Interface.MacConfiguration](https://www.electron.build/electron-builder.interface.macconfiguration)는 `hardenedRuntime` 기본값이 `true`라고 설명합니다.
+
+Electron Builder의 macOS 기본 target은 `dmg`와 `zip` 조합입니다. KanVibe는 명시적으로 `--mac dmg zip`을 실행하므로 Homebrew용 DMG와 updater/보관용 ZIP을 함께 만들 수 있습니다.
+
+> [electron builder.Interface.MacConfiguration](https://www.electron.build/electron-builder.interface.macconfiguration)는 macOS default target이 `dmg`와 `zip`이라고 설명합니다.
+
+## local release build
+
+릴리스 빌드는 macOS에서 실행합니다. native module인 `better-sqlite3`가 Electron 런타임 ABI에 맞게 rebuild 되어야 하므로 `pnpm dist:deploy`가 내부에서 `pnpm dist`를 실행합니다.
+
+> 프로젝트 기준: [`package.json`](../package.json)의 `rebuild:native:electron` script는 `electron-rebuild -f --only better-sqlite3`입니다.
+
+권장 실행 순서는 다음과 같습니다.
+
+```bash
+git status --short
+nvm use
+corepack enable
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+```
+
+서명 identity가 Keychain에 설치되어 있는지 확인합니다. 여기서 보이는 문자열을 `.env`의 `CSC_NAME`에 그대로 넣습니다.
+
+```bash
+security find-identity -v -p codesigning | grep "Developer ID Application"
+```
+
+배포 산출물 생성, DMG notarization 제출, stapling, Gatekeeper 검증을 한 번에 실행합니다.
+
+```bash
+pnpm dist:deploy
+```
+
+예상 산출물은 다음과 같습니다.
+
+```text
+dist/KanVibe-1.0.0.dmg
+dist/KanVibe-1.0.0-mac.zip
+```
+
+실제 ZIP 파일명은 Electron Builder target/arch 설정에 따라 달라질 수 있습니다. Homebrew Cask는 DMG만 고정 URL로 사용합니다.
+
+> [Adding Software to Homebrew](https://docs.brew.sh/Adding-Software-to-Homebrew)는 Cask의 `app` stanza가 설치할 `.app` bundle 경로를 나타낸다고 설명합니다.
+
+## notarization 제출과 검증
+
+`pnpm dist:deploy`는 아래 순서로 notarization과 검증을 자동 실행합니다.
+
+1. `.env` 로드
+2. `CSC_NAME`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` 검증
+3. `security find-identity`로 Keychain의 `Developer ID Application` identity 확인
+4. `pnpm dist` 실행
+5. `codesign --verify`로 `KanVibe.app` 서명 검증
+6. `xcrun notarytool submit dist/KanVibe-${VERSION}.dmg --wait` 실행
+7. `xcrun stapler staple`과 `xcrun stapler validate` 실행
+8. Homebrew Cask에 넣을 DMG `sha256` 출력
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 custom build workflow에서 `xcrun notarytool`로 업로드하고 `xcrun stapler`로 ticket을 붙일 수 있다고 안내합니다.
+
+notarization이 실패하면 `pnpm dist:deploy` 출력에 표시된 submission id로 notary log를 확인합니다. 서명 누락, Hardened Runtime, entitlements, native `.node` 파일 서명이 주된 실패 지점입니다.
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 notarization 실패 시 status log에서 설치를 막을 수 있는 code signing 문제의 세부 정보를 확인하라고 안내합니다.
+
+## `pnpm dist:deploy` 성공 후 진행 순서
+
+`pnpm dist:deploy`가 성공하면 `dist/KanVibe-${VERSION}.dmg`는 Apple notarization에 Accepted 되었고 stapling까지 끝난 상태입니다. 이 시점부터는 DMG를 다시 만들거나 수정하지 말고, 같은 파일을 GitHub Release와 Homebrew Cask에 그대로 사용합니다.
+
+```bash
+VERSION=$(node -p "require('./package.json').version")
+DMG_PATH="dist/KanVibe-${VERSION}.dmg"
+DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+
+ls -lh "$DMG_PATH" dist/*.zip
+xcrun stapler validate "$DMG_PATH"
+echo "$DMG_SHA256"
+```
+
+예를 들어 1.0.0 배포 로그가 아래 상태로 끝났다면 Homebrew 배포에 필요한 값은 `version "1.0.0"`과 `sha256 "759c8d56debc2915b2691ab60e7ffb68422d5f7bc1accc3f704fcc11ddaab237"`입니다.
+
+```text
+status: Accepted
+The staple and validate action worked!
+The validate action worked!
+DMG sha256:
+759c8d56debc2915b2691ab60e7ffb68422d5f7bc1accc3f704fcc11ddaab237  dist/KanVibe-1.0.0.dmg
+```
+
+> [Adding Software to Homebrew](https://docs.brew.sh/Adding-Software-to-Homebrew)는 `sha256`을 `shasum -a 256 <file>`로 계산한 다운로드 파일의 SHA-256 checksum이라고 설명합니다.
+
+이후 순서는 고정입니다.
+
+1. KanVibe 앱 저장소에서 GitHub Release를 만들고 DMG와 ZIP을 업로드합니다.
+2. 개인 Homebrew tap 저장소에서 `Casks/kanvibe.rb`를 갱신합니다.
+3. tap 저장소에서 Cask 설치, 제거, audit, style을 검증하고 push합니다.
+
+## GitHub Release 만들기
+
+GitHub 웹 페이지에서 Release를 만드는 방식은 공식적으로 지원됩니다. GitHub 문서는 web browser 경로에서 Release를 만들고 binary files를 드래그하거나 직접 선택해 첨부할 수 있다고 안내하므로, KanVibe의 수동 배포 문서는 웹 UI 기준으로 정리합니다.
+
+> [Managing releases in a repository](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)는 GitHub 웹에서 `Releases` > `Draft a new release`로 이동해 tag와 title을 정하고, binary files를 첨부할 수 있다고 안내합니다.
+
+Release를 만들기 전에 release commit이 GitHub에 push되어 있어야 합니다. `package.json`의 version이 `1.0.0`이면 tag는 `v1.0.0`, DMG asset 이름은 `KanVibe-1.0.0.dmg`로 맞춥니다.
+
+브라우저에서 아래 순서로 진행합니다.
+
+1. `https://github.com/rookedsysc/kanvibe`로 이동합니다.
+2. `Releases`를 누르고 `Draft a new release`를 선택합니다.
+3. `Choose a tag`에서 `v1.0.0`을 입력합니다. 기존 tag가 없으면 `Create new tag: v1.0.0`을 선택합니다.
+4. 새 tag를 만드는 경우 `Target`은 release commit이 들어 있는 branch로 둡니다.
+5. `Release title`에 `KanVibe v1.0.0`을 입력합니다.
+6. 설명에는 릴리스 요약을 적거나 `Generate release notes`를 사용합니다.
+7. binaries 영역에 `dist/KanVibe-1.0.0.dmg`와 `dist/*.zip`을 첨부합니다.
+8. 공개 stable 릴리스라면 `Set as latest release`를 선택합니다.
+9. `Publish release`를 누릅니다.
+
+Publish 후 asset 목록에 `KanVibe-1.0.0.dmg`가 보여야 합니다. 이 이름이 Cask URL의 `KanVibe-#{version}.dmg`와 다르면 `brew install --cask`가 404로 실패합니다.
+
+## 개인 Homebrew tap 갱신
+
+`Casks/kanvibe.rb`는 KanVibe 앱 저장소가 아니라 개인 Homebrew tap 저장소에 들어가는 Ruby 파일입니다. 이 파일은 Homebrew에게 어느 URL에서 DMG를 받고, 어떤 checksum으로 검증하고, DMG 안의 어떤 `.app`을 `/Applications`로 설치할지 알려줍니다.
+
+> [Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)는 cask가 선언형 Ruby block이고, `version`, `sha256`, `url`, `name`, `desc`, `homepage`과 하나 이상의 artifact stanza를 사용한다고 설명합니다.
+
+처음 배포하는 경우 tap 저장소를 만듭니다.
+
+```bash
+brew tap-new rookedsysc/kanvibe
+cd "$(brew --repository rookedsysc/kanvibe)"
+mkdir -p Casks
+git remote add origin git@github.com:rookedsysc/homebrew-kanvibe.git
+git branch -M main
+```
+
+이미 tap 저장소가 있다면 기존 tap으로 이동합니다.
+
+```bash
+brew tap rookedsysc/kanvibe
+cd "$(brew --repository rookedsysc/kanvibe)"
+mkdir -p Casks
+```
+
+> [How to Create and Maintain a Tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)는 `brew tap-new`가 올바른 directory structure를 가진 local tap을 만들고, tap은 수정 후 commit과 push로 유지한다고 설명합니다.
+
+`Casks/kanvibe.rb`가 없다면 KanVibe 앱 저장소의 템플릿을 복사합니다.
+
+```bash
+KANVIBE_APP_REPO="/Users/rookedsysc/Documents/kanvibe/kanvibe__worktrees/deploy"
+cp "$KANVIBE_APP_REPO/distribution/homebrew/kanvibe.rb.template" Casks/kanvibe.rb
+```
+
+그 다음 `Casks/kanvibe.rb`에서 이번 릴리스 값만 바꿉니다.
+
+```ruby
+cask "kanvibe" do
+  version "1.0.0"
+  sha256 "759c8d56debc2915b2691ab60e7ffb68422d5f7bc1accc3f704fcc11ddaab237"
+
+  url "https://github.com/rookedsysc/kanvibe/releases/download/v#{version}/KanVibe-#{version}.dmg"
+  name "KanVibe"
+  desc "AI agent task management Kanban board"
+  homepage "https://github.com/rookedsysc/kanvibe"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  app "KanVibe.app"
+
+  zap trash: [
+    "~/Library/Application Support/KanVibe",
+    "~/Library/Preferences/com.kanvibe.desktop.plist",
+  ]
+end
+```
+
+위 Cask에서 실제 다운로드 URL은 `https://github.com/rookedsysc/kanvibe/releases/download/v1.0.0/KanVibe-1.0.0.dmg`로 해석됩니다. Release tag, DMG asset 이름, `version` 값이 이 규칙으로 맞아야 합니다.
+
+tap 저장소에서 Cask를 검증하고 push합니다.
+
+```bash
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_INSTALL_FROM_API=1
+
+brew install --cask ./Casks/kanvibe.rb
+open -a KanVibe
+brew uninstall --cask kanvibe
+brew audit --new --cask kanvibe
+brew style --fix Casks/kanvibe.rb
+brew livecheck --cask kanvibe
+
+git add Casks/kanvibe.rb
+git commit -m "Update KanVibe to ${VERSION}"
+git push
+```
+
+> [Adding Software to Homebrew](https://docs.brew.sh/Adding-Software-to-Homebrew)는 Cask 작성 후 설치, 제거, `brew audit --new --cask`, `brew style --fix`를 미리 수행하라고 안내합니다.
+
+사용자는 아래 명령으로 설치할 수 있습니다.
+
+```bash
+brew install --cask rookedsysc/kanvibe/kanvibe
+```
+
+> [How to Create and Maintain a Tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)는 tap 안의 항목을 `user/repository/formula` 형태로 직접 설치하는 방식을 권장합니다.
+
+## 공식 Homebrew Cask 제출 판단
+
+공식 `homebrew/cask` 제출은 개인 tap에서 설치와 업데이트가 안정화된 뒤 진행합니다. 공식 제출 전에 최소한 아래를 만족해야 합니다.
+
+- GitHub Release asset URL이 로그인 없이 공개 접근 가능해야 합니다.
+- 앱이 Gatekeeper가 켜진 최신 Homebrew 지원 macOS에서 실행되어야 합니다.
+- 공식 홈페이지 또는 충분한 public presence가 있어야 합니다.
+- `brew audit --new --cask`를 통과해야 합니다.
+- release asset 파일명과 Cask URL 규칙이 장기적으로 유지되어야 합니다.
+
+> [Acceptable Casks](https://docs.brew.sh/Acceptable-Casks)는 공식 repository가 discoverability service가 아니며, public presence가 없거나 Gatekeeper에서 실패하는 앱은 거절될 수 있다고 설명합니다.
+
+공식 제출을 하더라도 개인 tap은 유지하는 편이 좋습니다. 공식 PR 검토 중에도 사용자가 설치할 수 있고, 공식 기준에 맞지 않는 실험 릴리스도 별도로 제공할 수 있습니다.
+
+## 릴리스 체크리스트
+
+1. `package.json`의 `version`을 새 버전으로 올립니다.
+2. `electron-builder.yml`의 `dmg.artifactName`과 Cask URL 파일명이 같은지 확인합니다.
+3. Apple Developer Program membership이 활성 상태인지 확인합니다.
+4. `Developer ID Application` identity가 keychain에 있는지 확인합니다.
+5. App Store Connect API Key의 `.p8`, Key ID, Issuer ID를 repository 밖에 둡니다.
+6. `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm test`를 통과시킵니다.
+7. `.env`에 `CSC_NAME`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`를 채웁니다.
+8. `pnpm dist:deploy`를 실행합니다.
+9. `xcrun stapler validate "dist/KanVibe-${VERSION}.dmg"`를 확인합니다.
+10. script가 출력한 최종 DMG `sha256`을 기록합니다.
+11. GitHub 웹 페이지에서 `v${VERSION}` Release를 만들고 DMG와 ZIP을 업로드합니다.
+12. Release asset 이름에 `KanVibe-${VERSION}.dmg`가 있는지 확인합니다.
+13. tap의 `Casks/kanvibe.rb`에서 `version`과 `sha256`을 갱신합니다.
+14. tap 저장소에서 `brew install --cask ./Casks/kanvibe.rb`, `brew uninstall --cask kanvibe`, `brew audit --new --cask kanvibe`, `brew livecheck --cask kanvibe`를 통과시킵니다.
+15. Release page에서 DMG를 직접 다운로드해 fresh machine 또는 별도 macOS 계정에서 실행합니다.
+
+## 자주 나는 실패와 대응
+
+### `brew install --cask`가 404로 실패합니다
+
+대부분 GitHub Release tag, asset 파일명, Cask URL 중 하나가 맞지 않는 문제입니다. KanVibe는 `v#{version}` tag와 `KanVibe-#{version}.dmg` asset 이름을 맞추는 규칙으로 고정합니다.
+
+브라우저에서 `https://github.com/rookedsysc/kanvibe/releases/tag/v1.0.0`을 열고 asset 목록에 `KanVibe-1.0.0.dmg`가 있는지 확인합니다. 파일명이 다르면 Release asset을 다시 올리거나 Cask URL 규칙을 실제 파일명에 맞춰 수정합니다.
+
+### `sha256 mismatch`가 납니다
+
+Release asset을 올린 뒤 DMG를 다시 notarize/staple 했거나, 같은 tag asset을 교체했을 가능성이 큽니다. GitHub Release의 실제 DMG를 다시 다운로드해서 `shasum -a 256`을 계산하고 Cask를 갱신합니다.
+
+### 앱이 "damaged" 또는 "cannot be opened"로 실행되지 않습니다
+
+서명 또는 notarization 실패 가능성이 큽니다. 먼저 Release asset의 DMG에 notarization ticket이 붙어 있는지 검사합니다.
+
+```bash
+VERSION=$(node -p "require('./package.json').version")
+DMG_PATH="/tmp/KanVibe-${VERSION}.dmg"
+
+xcrun stapler validate "$DMG_PATH"
+```
+
+> [Acceptable Casks](https://docs.brew.sh/Acceptable-Casks)는 Gatekeeper가 켜진 지원 macOS에서 실패하는 앱이 공식 cask에서 거절될 수 있다고 설명합니다.
+
+### notarization이 invalid로 끝납니다
+
+notary log를 보고 가장 먼저 error path를 확인합니다. Electron 앱은 native `.node`, helper app, framework, entitlements 쪽에서 문제가 자주 납니다.
+
+```bash
+xcrun notarytool log "$SUBMISSION_ID" \
+  --key "$APPLE_API_KEY" \
+  --key-id "$APPLE_API_KEY_ID" \
+  --issuer "$APPLE_API_ISSUER" \
+  notary-log.json
+```
+
+> [Signing your apps for Gatekeeper](https://developer.apple.com/developer-id/)는 notarization service가 악성 코드뿐 아니라 설치를 막을 수 있는 일반적인 code signing 문제도 잡는다고 설명합니다.
