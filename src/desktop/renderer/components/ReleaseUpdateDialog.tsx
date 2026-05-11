@@ -12,6 +12,7 @@ import {
   dismissReleaseUpdateVersion,
   getReleaseUpdateDismissedVersions,
 } from "@/desktop/renderer/actions/appSettings";
+import { useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const RELEASE_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -63,10 +64,12 @@ function ReleaseNotesContent({ body, emptyMessage }: { body: string; emptyMessag
 }
 
 export default function ReleaseUpdateDialog() {
+  const { registerShortcutBlocker } = useBoardCommands();
   const t = useTranslations("common.releaseUpdate");
   const tc = useTranslations("common");
   const [release, setRelease] = useState<ReleaseUpdate | null>(null);
   const [shouldDismissReleaseVersion, setShouldDismissReleaseVersion] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
   const shownReleaseVersionsRef = useRef<Set<string>>(new Set());
   const isCheckingRef = useRef(false);
 
@@ -123,6 +126,32 @@ export default function ReleaseUpdateDialog() {
   useEscapeKey(closeDialog, { enabled: Boolean(release) });
 
   useEffect(() => {
+    if (!release) {
+      return;
+    }
+
+    return registerShortcutBlocker();
+  }, [registerShortcutBlocker, release]);
+
+  useEffect(() => {
+    if (!release) {
+      return;
+    }
+
+    const previousFocusedElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    dialogRef.current?.focus({ preventScroll: true });
+
+    return () => {
+      if (previousFocusedElement?.isConnected) {
+        previousFocusedElement.focus({ preventScroll: true });
+      }
+    };
+  }, [release]);
+
+  useEffect(() => {
     void runReleaseUpdateCheck();
     const intervalId = window.setInterval(() => {
       void runReleaseUpdateCheck();
@@ -159,9 +188,11 @@ export default function ReleaseUpdateDialog() {
         onClick={closeDialog}
       />
       <section
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="release-update-title"
+        tabIndex={-1}
         className="relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border-default bg-bg-surface shadow-2xl"
       >
         <div className="border-b border-border-subtle px-5 py-4">

@@ -16,10 +16,12 @@ function BoardCommandHarness({
   onToggleNotificationCenter,
   onOpenProjectFilter,
   onOpenCreateTaskModal,
+  blockShortcuts = false,
 }: {
   onToggleNotificationCenter: () => void;
   onOpenProjectFilter: () => void;
   onOpenCreateTaskModal: (defaults?: { projectId: string; baseBranch: string }) => void;
+  blockShortcuts?: boolean;
 }) {
   const boardCommands = useBoardCommands();
 
@@ -28,6 +30,14 @@ function BoardCommandHarness({
     openProjectFilter: onOpenProjectFilter,
     openCreateTaskModal: onOpenCreateTaskModal,
   }), [boardCommands, onOpenCreateTaskModal, onOpenProjectFilter, onToggleNotificationCenter]);
+
+  useEffect(() => {
+    if (!blockShortcuts) {
+      return;
+    }
+
+    return boardCommands.registerShortcutBlocker();
+  }, [blockShortcuts, boardCommands]);
 
   return (
     <div>
@@ -137,6 +147,42 @@ describe("BoardCommandProvider", () => {
     expect(onOpenProjectFilter).not.toHaveBeenCalled();
   });
 
+  it("ignores board shortcuts while a shortcut blocker is registered", () => {
+    const onToggleNotificationCenter = vi.fn();
+    const onOpenProjectFilter = vi.fn();
+    const onOpenCreateTaskModal = vi.fn();
+
+    renderWithRouter(
+      <BoardCommandProvider>
+        <BoardCommandHarness
+          onToggleNotificationCenter={onToggleNotificationCenter}
+          onOpenProjectFilter={onOpenProjectFilter}
+          onOpenCreateTaskModal={onOpenCreateTaskModal}
+          blockShortcuts
+        />
+      </BoardCommandProvider>,
+    );
+
+    fireEvent.keyDown(window, {
+      key: "i",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, {
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, {
+      key: "n",
+      ctrlKey: true,
+    });
+
+    expect(onToggleNotificationCenter).not.toHaveBeenCalled();
+    expect(onOpenProjectFilter).not.toHaveBeenCalled();
+    expect(onOpenCreateTaskModal).not.toHaveBeenCalled();
+  });
+
   it("forwards branch todo requests to the registered board handler", () => {
     const onToggleNotificationCenter = vi.fn();
     const onOpenProjectFilter = vi.fn();
@@ -217,6 +263,44 @@ describe("BoardCommandProvider", () => {
 
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores desktop shortcut bridge events while a shortcut blocker is registered", () => {
+    const onToggleNotificationCenter = vi.fn();
+    const onOpenProjectFilter = vi.fn();
+    const onOpenCreateTaskModal = vi.fn();
+    let createTaskShortcutListener: (() => void) | null = null;
+    let notificationShortcutListener: (() => void) | null = null;
+    window.kanvibeDesktop = {
+      isDesktop: true,
+      onCreateTaskShortcut: vi.fn((listener: () => void) => {
+        createTaskShortcutListener = listener;
+        return vi.fn();
+      }),
+      onNotificationShortcut: vi.fn((listener: () => void) => {
+        notificationShortcutListener = listener;
+        return vi.fn();
+      }),
+    } as never;
+
+    renderWithRouter(
+      <BoardCommandProvider>
+        <BoardCommandHarness
+          onToggleNotificationCenter={onToggleNotificationCenter}
+          onOpenProjectFilter={onOpenProjectFilter}
+          onOpenCreateTaskModal={onOpenCreateTaskModal}
+          blockShortcuts
+        />
+      </BoardCommandProvider>,
+    );
+
+    act(() => {
+      createTaskShortcutListener?.();
+      notificationShortcutListener?.();
+    });
+
+    expect(onOpenCreateTaskModal).not.toHaveBeenCalled();
+    expect(onToggleNotificationCenter).not.toHaveBeenCalled();
   });
 
   it("dispatches the notification shortcut to a notification-only handler", () => {
