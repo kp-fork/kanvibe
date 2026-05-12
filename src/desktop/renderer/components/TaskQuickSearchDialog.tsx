@@ -21,7 +21,11 @@ import {
 import { requestActiveTerminalFocusAfterUiSettles } from "@/desktop/renderer/utils/terminalFocus";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 import { fuzzyMatch, type FuzzyMatch } from "@/utils/fuzzySearch";
-import { CREATE_BRANCH_TODO_SHORTCUT, useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
+import {
+  CREATE_BRANCH_TODO_SHORTCUT,
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+} from "@/desktop/renderer/components/BoardCommandProvider";
 
 interface TaskQuickSearchDialogProps {
   shortcut?: string;
@@ -204,6 +208,7 @@ export default function TaskQuickSearchDialog({
   shortcut,
 }: TaskQuickSearchDialogProps) {
   const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
   const t = useTranslations("taskSearch");
   const tc = useTranslations("common");
   const router = useRouter();
@@ -265,6 +270,10 @@ export default function TaskQuickSearchDialog({
         return;
       }
 
+      if (hasShortcutBlocker) {
+        return;
+      }
+
       const eventTarget = event.target;
       if (eventTarget instanceof Element && eventTarget.closest('[data-shortcut-capture="true"]')) {
         return;
@@ -287,7 +296,7 @@ export default function TaskQuickSearchDialog({
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
     };
-  }, [closeDialog, effectiveShortcut, isOpen, openDialog, shortcutPlatform]);
+  }, [closeDialog, effectiveShortcut, hasShortcutBlocker, isOpen, openDialog, shortcutPlatform]);
 
   useEffect(() => {
     if (!isOpen) {

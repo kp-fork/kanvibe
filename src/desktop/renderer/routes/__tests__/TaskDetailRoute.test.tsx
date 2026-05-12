@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BoardCommandProvider } from "@/desktop/renderer/components/BoardCommandProvider";
+import {
+  BoardCommandProvider,
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+} from "@/desktop/renderer/components/BoardCommandProvider";
 import TaskDetailRoute from "@/desktop/renderer/routes/TaskDetailRoute";
 import { INITIAL_DESKTOP_LOAD_TIMEOUT_MS } from "@/desktop/renderer/utils/loadingTimeout";
 
@@ -46,6 +50,19 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function TaskDetailShortcutBlocker() {
+  const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
+
+  useEffect(() => boardCommands.registerShortcutBlocker(), [boardCommands]);
+
+  return (
+    <span data-testid="shortcut-blocker-state">
+      {hasShortcutBlocker ? "blocked" : "open"}
+    </span>
+  );
 }
 
 vi.mock("next-intl", () => ({
@@ -815,6 +832,59 @@ describe("TaskDetailRoute", () => {
     expect(await screen.findByTestId("hooks-status-card")).toBeTruthy();
   });
 
+  it("shortcut blocker가 등록되어 있으면 상세 dock shortcut을 실행하지 않는다", async () => {
+    let dockShortcutListener: ((index: number) => void) | null = null;
+    window.kanvibeDesktop = {
+      isDesktop: true,
+      onTaskDetailDockShortcut(listener: (index: number) => void) {
+        dockShortcutListener = listener;
+        return () => {
+          dockShortcutListener = null;
+        };
+      },
+    };
+    mocks.getSidebarDefaultCollapsed.mockResolvedValue(true);
+    mocks.getTaskById.mockResolvedValue({
+      id: "task-1",
+      title: "task title",
+      description: null,
+      branchName: "feat/detail-shortcut",
+      baseBranch: "main",
+      prUrl: null,
+      sessionType: "tmux",
+      sessionName: "task-session",
+      sshHost: null,
+      projectId: "project-1",
+      project: { id: "project-1", name: "kanvibe" },
+      status: "todo",
+      agentType: null,
+      worktreePath: "/repo__worktrees/detail-shortcut",
+    });
+
+    render(
+      <BoardCommandProvider>
+        <TaskDetailShortcutBlocker />
+        <TaskDetailRoute />
+      </BoardCommandProvider>,
+    );
+
+    await screen.findByLabelText("terminal input");
+    await waitFor(() => {
+      expect(screen.getByTestId("shortcut-blocker-state").textContent).toBe("blocked");
+    });
+
+    const wasNotPrevented = fireEvent.keyDown(window, {
+      key: "2",
+      altKey: true,
+    });
+    act(() => {
+      dockShortcutListener?.(2);
+    });
+
+    expect(wasNotPrevented).toBe(false);
+    expect(screen.queryByTestId("hooks-status-card")).toBeNull();
+  });
+
   it("채팅 아이콘을 클릭하면 drawer 대신 메인 영역을 AI 채팅 내역으로 전환한다", async () => {
     mocks.getTaskById.mockResolvedValue({
       id: "task-1",
@@ -1101,6 +1171,53 @@ describe("TaskDetailRoute", () => {
 
     expect(mocks.forward).toHaveBeenCalledTimes(1);
     expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+
+  it("shortcut blocker가 등록되어 있으면 상세 화면 페이지 이동 단축키를 실행하지 않는다", async () => {
+    mocks.getTaskById.mockResolvedValue({
+      id: "task-1",
+      title: "task title",
+      description: null,
+      branchName: "feat/detail-shortcut",
+      baseBranch: "main",
+      prUrl: null,
+      sessionType: "tmux",
+      sessionName: "task-session",
+      sshHost: null,
+      projectId: "project-1",
+      project: { id: "project-1", name: "kanvibe" },
+      status: "todo",
+      agentType: null,
+      worktreePath: "/repo__worktrees/detail-shortcut",
+    });
+
+    render(
+      <BoardCommandProvider>
+        <TaskDetailShortcutBlocker />
+        <TaskDetailRoute />
+      </BoardCommandProvider>,
+    );
+
+    const terminalInput = await screen.findByLabelText("terminal input");
+    await waitFor(() => {
+      expect(screen.getByTestId("shortcut-blocker-state").textContent).toBe("blocked");
+    });
+
+    const wasBackNotPrevented = fireEvent.keyDown(terminalInput, {
+      key: "[",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    const wasForwardNotPrevented = fireEvent.keyDown(terminalInput, {
+      key: "]",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(wasBackNotPrevented).toBe(false);
+    expect(wasForwardNotPrevented).toBe(false);
+    expect(mocks.back).not.toHaveBeenCalled();
+    expect(mocks.forward).not.toHaveBeenCalled();
   });
 
   it("알림 단축키로 상세 화면의 알림 센터를 토글한다", async () => {

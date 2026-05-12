@@ -2,7 +2,14 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useTranslations } from "next-intl";
 import {
   checkForReleaseUpdate,
@@ -19,6 +26,14 @@ const RELEASE_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const RELEASE_NOTES_SANITIZE_CONFIG = {
   ADD_ATTR: ["target", "rel", "loading", "referrerpolicy"],
 };
+const RELEASE_DIALOG_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
 
 function addReleaseNotesElementAttributes(html: string) {
   const template = document.createElement("template");
@@ -44,6 +59,11 @@ function renderReleaseNotesHtml(markdown: string) {
   }) as string;
   const sanitizedHtml = DOMPurify.sanitize(rawHtml, RELEASE_NOTES_SANITIZE_CONFIG);
   return addReleaseNotesElementAttributes(sanitizedHtml);
+}
+
+function getFocusableDialogElements(dialog: HTMLElement) {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(RELEASE_DIALOG_FOCUSABLE_SELECTOR))
+    .filter((element) => element.getAttribute("aria-hidden") !== "true");
 }
 
 function ReleaseNotesContent({ body, emptyMessage }: { body: string; emptyMessage: string }) {
@@ -175,6 +195,42 @@ export default function ReleaseUpdateDialog() {
     closeDialog();
   }
 
+  function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    const focusableElements = getFocusableDialogElements(dialog);
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      dialog.focus({ preventScroll: true });
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const isFocusOutsideDialog = !activeElement || !dialog.contains(activeElement);
+
+    if (event.shiftKey) {
+      if (isFocusOutsideDialog || activeElement === dialog || activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus({ preventScroll: true });
+      }
+      return;
+    }
+
+    if (isFocusOutsideDialog || activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus({ preventScroll: true });
+    }
+  }
+
   return (
     <div
       data-shortcut-capture="true"
@@ -193,6 +249,7 @@ export default function ReleaseUpdateDialog() {
         aria-modal="true"
         aria-labelledby="release-update-title"
         tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
         className="relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border-default bg-bg-surface shadow-2xl"
       >
         <div className="border-b border-border-subtle px-5 py-4">

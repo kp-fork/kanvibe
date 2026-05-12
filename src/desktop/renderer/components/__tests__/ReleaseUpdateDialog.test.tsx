@@ -132,6 +132,24 @@ describe("ReleaseUpdateDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps tab focus inside the release dialog", async () => {
+    mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
+
+    render(<ReleaseUpdateDialog />);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    const checkbox = screen.getByLabelText("common.releaseUpdate.dontShowVersionAgain");
+    const viewReleaseButton = screen.getByRole("button", { name: "common.releaseUpdate.viewRelease" });
+
+    viewReleaseButton.focus();
+    fireEvent.keyDown(viewReleaseButton, { key: "Tab" });
+    expect(document.activeElement).toBe(checkbox);
+
+    checkbox.focus();
+    fireEvent.keyDown(checkbox, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(viewReleaseButton);
+  });
+
   it("does not persist a version when the don't show again checkbox is unchecked", async () => {
     mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
 

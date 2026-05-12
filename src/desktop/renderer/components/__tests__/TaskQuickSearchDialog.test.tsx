@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   requestCreateBranchTodo: vi.fn(),
   scrollIntoView: vi.fn(),
   setTaskQuickSearchOpen: vi.fn(),
+  hasShortcutBlocker: false,
 }));
 
 vi.mock("next-intl", () => ({
@@ -37,11 +38,13 @@ vi.mock("@/desktop/renderer/components/BoardCommandProvider", () => ({
     setTaskQuickSearchOpen: mocks.setTaskQuickSearchOpen,
     canCreateBranchTodo: true,
   }),
+  useHasBoardShortcutBlocker: () => mocks.hasShortcutBlocker,
 }));
 
 describe("TaskQuickSearchDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.hasShortcutBlocker = false;
     window.history.replaceState({}, "", "/#/en");
     window.kanvibeDesktop = {
       isDesktop: true,
@@ -136,6 +139,20 @@ describe("TaskQuickSearchDialog", () => {
     });
 
     expect(wasNotPrevented).toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.getSearchableTasks).not.toHaveBeenCalled();
+  });
+
+  it("shortcut blocker가 등록되어 있으면 단축키로 검색 다이얼로그를 열지 않는다", () => {
+    mocks.hasShortcutBlocker = true;
+
+    render(<TaskQuickSearchDialog shortcut="Ctrl+K" />);
+
+    fireEvent.keyDown(window, {
+      key: "k",
+      ctrlKey: true,
+    });
+
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(mocks.getSearchableTasks).not.toHaveBeenCalled();
   });

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
+import { useHasBoardShortcutBlocker } from "@/desktop/renderer/components/BoardCommandProvider";
 import { SHORTCUTS, getCurrentShortcutPlatform, matchShortcutEvent } from "@/desktop/renderer/utils/keyboardShortcut";
 
 const BOARD_PAGE_FIND_SHORTCUT = SHORTCUTS.boardPageFind;
@@ -15,7 +16,20 @@ function findPageText(query: string, backwards = false) {
   return window.find(trimmedQuery, false, backwards, true, false, false, false);
 }
 
+function shouldIgnoreBoardPageFindShortcut(eventTarget: EventTarget | null) {
+  if (!(eventTarget instanceof Element)) {
+    return false;
+  }
+
+  if (eventTarget.closest('[data-shortcut-capture="true"]')) {
+    return true;
+  }
+
+  return Boolean(eventTarget.closest("input, textarea, select, [contenteditable='true']"));
+}
+
 export default function BoardPageFindBar() {
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
   const t = useTranslations("board");
   const tc = useTranslations("common");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -37,6 +51,10 @@ export default function BoardPageFindBar() {
 
   useEffect(() => {
     function handleGlobalKeyDown(event: KeyboardEvent) {
+      if (hasShortcutBlocker || shouldIgnoreBoardPageFindShortcut(event.target)) {
+        return;
+      }
+
       if (!matchShortcutEvent(event, BOARD_PAGE_FIND_SHORTCUT, shortcutPlatform)) {
         return;
       }
@@ -49,7 +67,7 @@ export default function BoardPageFindBar() {
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
     };
-  }, [shortcutPlatform]);
+  }, [hasShortcutBlocker, shortcutPlatform]);
 
   function closeSearchBar() {
     setIsOpen(false);

@@ -27,7 +27,11 @@ import {
   getTaskOpenCodeHooksStatus,
   getAllProjects,
 } from "@/desktop/renderer/actions/project";
-import { useBoardCommands, type BranchTodoDefaults } from "@/desktop/renderer/components/BoardCommandProvider";
+import {
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+  type BranchTodoDefaults,
+} from "@/desktop/renderer/components/BoardCommandProvider";
 import TerminalLoader from "@/desktop/renderer/components/TerminalLoader";
 import { fetchPrUrlWithPrompt } from "@/desktop/renderer/utils/fetchPrUrlWithPrompt";
 import {
@@ -319,6 +323,7 @@ export default function TaskDetailRoute() {
   const { id = "" } = useParams();
   const router = useRouter();
   const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
   const t = useTranslations("taskDetail");
   const tc = useTranslations("common");
   const refreshSignal = useRefreshSignal(["all", "task-detail"]);
@@ -491,12 +496,22 @@ export default function TaskDetailRoute() {
 
     function handlePriorityHistoryShortcut(event: KeyboardEvent) {
       if (matchShortcutEvent(event, SHORTCUTS.pageBack, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
         consumeHistoryShortcut(event);
         router.back();
         return;
       }
 
       if (matchShortcutEvent(event, SHORTCUTS.pageForward, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
         consumeHistoryShortcut(event);
         router.forward();
       }
@@ -506,7 +521,7 @@ export default function TaskDetailRoute() {
     return () => {
       window.removeEventListener("keydown", handlePriorityHistoryShortcut, { capture: true });
     };
-  }, [router, shortcutPlatform]);
+  }, [hasShortcutBlocker, router, shortcutPlatform]);
 
   useEffect(() => {
     function consumeDockShortcut(event: KeyboardEvent) {
@@ -518,6 +533,11 @@ export default function TaskDetailRoute() {
     function handlePriorityDockShortcut(event: KeyboardEvent) {
       const shortcutIndex = matchTaskDetailDockShortcutEvent(event, shortcutPlatform);
       if (shortcutIndex === null) {
+        return;
+      }
+
+      if (hasShortcutBlocker) {
+        consumeDockShortcut(event);
         return;
       }
 
@@ -533,13 +553,17 @@ export default function TaskDetailRoute() {
     return () => {
       window.removeEventListener("keydown", handlePriorityDockShortcut, { capture: true });
     };
-  }, [activateDockItem, shortcutPlatform]);
+  }, [activateDockItem, hasShortcutBlocker, shortcutPlatform]);
 
   useEffect(() => (
     window.kanvibeDesktop?.onTaskDetailDockShortcut?.((shortcutIndex: number) => {
+      if (hasShortcutBlocker) {
+        return;
+      }
+
       activateDockItem(shortcutIndex);
     }) ?? undefined
-  ), [activateDockItem]);
+  ), [activateDockItem, hasShortcutBlocker]);
 
   useEffect(() => {
     if (currentTaskIdRef.current === id) {

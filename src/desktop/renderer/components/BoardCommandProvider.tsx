@@ -55,6 +55,7 @@ const defaultBoardCommandContextValue: BoardCommandContextValue = {
 };
 
 const BoardCommandContext = createContext<BoardCommandContextValue | null>(null);
+const BoardShortcutBlockerContext = createContext(false);
 
 function shouldIgnoreGlobalShortcut(eventTarget: EventTarget | null) {
   if (!(eventTarget instanceof Element)) {
@@ -235,11 +236,17 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
 
   return (
     <BoardCommandContext.Provider value={value}>
-      {children}
+      <BoardShortcutBlockerContext.Provider value={hasShortcutBlocker}>
+        {children}
+      </BoardShortcutBlockerContext.Provider>
     </BoardCommandContext.Provider>
   );
 }
 
 export function useBoardCommands() {
   return useContext(BoardCommandContext) ?? defaultBoardCommandContextValue;
+}
+
+export function useHasBoardShortcutBlocker() {
+  return useContext(BoardShortcutBlockerContext);
 }
