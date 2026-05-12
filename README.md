@@ -20,26 +20,68 @@ Use shortcuts for project filters, task search, notifications, task detail panel
 
 <div align="center">
 
-<img src="./docs/images/readme/kanvibe-main.png" alt="KanVibe Kanban board" width="100%">
-
-**[Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
-
 <table>
   <tr>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-detail.png" alt="Task detail terminal workspace" width="100%"></td>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-detail-shortcut.png" alt="Task detail shortcut panel" width="100%"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-search-shortcut.png" alt="Quick task search shortcut" width="100%"></td>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-project-search-shortcut.png" alt="Project filter shortcut" width="100%"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-notification-shortcut.png" alt="Notification shortcut panel" width="100%"></td>
-    <td width="50%"><img src="./docs/images/readme/kanvibe-quick-action-shortcut.png" alt="Quick task action shortcut" width="100%"></td>
+    <td width="50%">
+      <img src="./docs/images/readme/kanvibe-main.png" alt="KanVibe Kanban board" width="100%">
+      <br>
+      <strong>Main Kanban board</strong>
+    </td>
+    <td width="50%">
+      <img src="./docs/images/readme/kanvibe-detail.png" alt="Task detail terminal workspace" width="100%">
+      <br>
+      <strong>Task detail workspace</strong>
+    </td>
   </tr>
 </table>
 
+<iframe
+  width="100%"
+  height="480"
+  src="https://www.youtube.com/embed/8JTrvd3T_Z0"
+  title="KanVibe demo"
+  frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  allowfullscreen>
+</iframe>
+
+**[Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
+
 </div>
+
+---
+
+## Key Workflows
+
+### 1. Quick Task Search
+
+Open task search from anywhere, filter by project or branch name, and jump directly into the task workspace without returning to the board first.
+
+<img src="./docs/images/readme/kanvibe-search-shortcut.png" alt="Quick task search shortcut" width="100%">
+
+### 2. Task Detail Shortcuts
+
+Use numbered dock shortcuts on a task detail page to open task metadata, hook status, AI chat, and PR actions before the keystroke reaches the embedded terminal.
+
+<img src="./docs/images/readme/kanvibe-detail-shortcut.png" alt="Task detail shortcut panel" width="100%">
+
+### 3. Project Filter
+
+Narrow the board to the active projects you care about, with keyboard navigation for switching between repositories quickly.
+
+<img src="./docs/images/readme/kanvibe-project-search-shortcut.png" alt="Project filter shortcut" width="100%">
+
+### 4. Notifications
+
+Open the notification panel to review AI agent status changes, background sync results, and task events, then jump to the related task.
+
+<img src="./docs/images/readme/kanvibe-notification-shortcut.png" alt="Notification shortcut panel" width="100%">
+
+### 5. Quick Task Actions
+
+Create follow-up branch TODOs directly from the highlighted search result, preserving project and branch context for the next piece of work.
+
+<img src="./docs/images/readme/kanvibe-quick-action-shortcut.png" alt="Quick task action shortcut" width="100%">
 
 ---
 
