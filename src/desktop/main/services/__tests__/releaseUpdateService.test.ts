@@ -46,33 +46,33 @@ describe("releaseUpdateService", () => {
 
     const release = selectLatestReleaseUpdate([
       {
-        tag_name: "v1.0.1",
+        tag_name: "1.0.1",
         name: "Small fix",
         body: "Patch notes",
-        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.0.1",
+        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.0.1",
       },
       {
-        tag_name: "v1.2.0",
+        tag_name: "1.2.0",
         name: "Draft release",
         body: "Hidden",
-        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.2.0",
+        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.2.0",
         draft: true,
       },
       {
-        tag_name: "v1.1.0",
+        tag_name: "1.1.0",
         name: "Feature release",
         body: "Feature notes",
-        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.1.0",
+        html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.1.0",
         published_at: "2026-05-10T00:00:00Z",
       },
     ], "1.0.0");
 
     expect(release).toEqual({
       version: "1.1.0",
-      tagName: "v1.1.0",
+      tagName: "1.1.0",
       name: "Feature release",
       body: "Feature notes",
-      htmlUrl: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.1.0",
+      htmlUrl: "https://github.com/rookedsysc/kanvibe/releases/tag/1.1.0",
       publishedAt: "2026-05-10T00:00:00Z",
     });
   });
@@ -99,16 +99,16 @@ describe("releaseUpdateService", () => {
       ok: true,
       json: vi.fn().mockResolvedValue([
         {
-          tag_name: "v1.0.0",
+          tag_name: "1.0.0",
           name: "Current",
           body: "",
-          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.0.0",
+          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.0.0",
         },
         {
-          tag_name: "v1.0.2",
+          tag_name: "1.0.2",
           name: "New release",
           body: "Release notes",
-          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/v1.0.2",
+          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.0.2",
         },
       ]),
     } as unknown as Response);
@@ -120,7 +120,7 @@ describe("releaseUpdateService", () => {
       isUpdateAvailable: true,
       release: {
         version: "1.0.2",
-        tagName: "v1.0.2",
+        tagName: "1.0.2",
         name: "New release",
         body: "Release notes",
       },

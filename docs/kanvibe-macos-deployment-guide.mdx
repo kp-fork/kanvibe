@@ -41,7 +41,7 @@ dmg:
 | App Store Connect API Key 발급 | `pnpm dist:deploy`의 `notarytool` 인증 | `AuthKey_XXXXXXXXXX.p8`, Key ID, Issuer ID |
 | KanVibe 빌드 | Electron 앱과 DMG 생성 | `dist/KanVibe-${VERSION}.dmg` |
 | Apple notarization | Gatekeeper 통과를 위한 자동 심사 | accepted notarization ticket |
-| GitHub Release | Homebrew가 받을 고정 다운로드 URL 제공 | `v${VERSION}` release assets |
+| GitHub Release | Homebrew가 받을 고정 다운로드 URL 제공 | `${VERSION}` release assets |
 | Homebrew Cask 배포 | `brew install --cask` 설치 경로 제공 | `Casks/kanvibe.rb` |
 
 > [Adding Software to Homebrew](https://docs.brew.sh/Adding-Software-to-Homebrew)는 Cask의 `url`이 `.dmg`, `.zip`, `.tgz` 같은 앱 archive를 가리키고, `sha256`은 다운로드 파일의 SHA-256 값이라고 설명합니다.
@@ -315,15 +315,15 @@ GitHub 웹 페이지에서 Release를 만드는 방식은 공식적으로 지원
 
 > [Managing releases in a repository](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)는 GitHub 웹에서 `Releases` > `Draft a new release`로 이동해 tag와 title을 정하고, binary files를 첨부할 수 있다고 안내합니다.
 
-Release를 만들기 전에 release commit이 GitHub에 push되어 있어야 합니다. `package.json`의 version이 `1.0.0`이면 tag는 `v1.0.0`, DMG asset 이름은 `KanVibe-1.0.0.dmg`로 맞춥니다.
+Release를 만들기 전에 release commit이 GitHub에 push되어 있어야 합니다. `package.json`의 version이 `1.0.0`이면 tag도 `1.0.0`, DMG asset 이름은 `KanVibe-1.0.0.dmg`로 맞춥니다. KanVibe는 tag에 `v` prefix를 붙이지 않는 규칙을 사용합니다.
 
 브라우저에서 아래 순서로 진행합니다.
 
 1. `https://github.com/rookedsysc/kanvibe`로 이동합니다.
 2. `Releases`를 누르고 `Draft a new release`를 선택합니다.
-3. `Choose a tag`에서 `v1.0.0`을 입력합니다. 기존 tag가 없으면 `Create new tag: v1.0.0`을 선택합니다.
+3. `Choose a tag`에서 `1.0.0`을 입력합니다. 기존 tag가 없으면 `Create new tag: 1.0.0`을 선택합니다.
 4. 새 tag를 만드는 경우 `Target`은 release commit이 들어 있는 branch로 둡니다.
-5. `Release title`에 `KanVibe v1.0.0`을 입력합니다.
+5. `Release title`에 `KanVibe 1.0.0`을 입력합니다.
 6. 설명에는 릴리스 요약을 적거나 `Generate release notes`를 사용합니다.
 7. binaries 영역에 `dist/KanVibe-1.0.0.dmg`만 첨부합니다.
 8. 공개 stable 릴리스라면 `Set as latest release`를 선택합니다.
@@ -371,15 +371,10 @@ cask "kanvibe" do
   version "1.0.0"
   sha256 "759c8d56debc2915b2691ab60e7ffb68422d5f7bc1accc3f704fcc11ddaab237"
 
-  url "https://github.com/rookedsysc/kanvibe/releases/download/v#{version}/KanVibe-#{version}.dmg"
+  url "https://github.com/rookedsysc/kanvibe/releases/download/#{version}/KanVibe-#{version}.dmg"
   name "KanVibe"
   desc "AI agent task management Kanban board"
   homepage "https://github.com/rookedsysc/kanvibe"
-
-  livecheck do
-    url :url
-    strategy :github_latest
-  end
 
   app "KanVibe.app"
 
@@ -390,7 +385,7 @@ cask "kanvibe" do
 end
 ```
 
-위 Cask에서 실제 다운로드 URL은 `https://github.com/rookedsysc/kanvibe/releases/download/v1.0.0/KanVibe-1.0.0.dmg`로 해석됩니다. Release tag, DMG asset 이름, `version` 값이 이 규칙으로 맞아야 합니다.
+위 Cask에서 실제 다운로드 URL은 `https://github.com/rookedsysc/kanvibe/releases/download/1.0.0/KanVibe-1.0.0.dmg`로 해석됩니다. Release tag, DMG asset 이름, `version` 값이 이 규칙으로 맞아야 합니다.
 
 tap 저장소에서 Cask를 검증하고 push합니다.
 
@@ -446,7 +441,7 @@ brew install --cask rookedsysc/kanvibe/kanvibe
 8. `pnpm dist:deploy`를 실행합니다.
 9. `xcrun stapler validate "dist/KanVibe-${VERSION}.dmg"`를 확인합니다.
 10. script가 출력한 최종 DMG `sha256`을 기록합니다.
-11. GitHub 웹 페이지에서 `v${VERSION}` Release를 만들고 DMG만 업로드합니다.
+11. GitHub 웹 페이지에서 `${VERSION}` Release를 만들고 DMG만 업로드합니다.
 12. Release asset 이름에 `KanVibe-${VERSION}.dmg`가 있는지 확인합니다.
 13. tap의 `Casks/kanvibe.rb`에서 `version`과 `sha256`을 갱신합니다.
 14. tap 저장소에서 `brew install --cask ./Casks/kanvibe.rb`, `brew uninstall --cask kanvibe`, `brew audit --new --cask kanvibe`, `brew livecheck --cask kanvibe`를 통과시킵니다.
@@ -456,9 +451,9 @@ brew install --cask rookedsysc/kanvibe/kanvibe
 
 ### `brew install --cask`가 404로 실패합니다
 
-대부분 GitHub Release tag, asset 파일명, Cask URL 중 하나가 맞지 않는 문제입니다. KanVibe는 `v#{version}` tag와 `KanVibe-#{version}.dmg` asset 이름을 맞추는 규칙으로 고정합니다.
+대부분 GitHub Release tag, asset 파일명, Cask URL 중 하나가 맞지 않는 문제입니다. KanVibe는 `#{version}` tag와 `KanVibe-#{version}.dmg` asset 이름을 맞추는 규칙으로 고정합니다.
 
-브라우저에서 `https://github.com/rookedsysc/kanvibe/releases/tag/v1.0.0`을 열고 asset 목록에 `KanVibe-1.0.0.dmg`가 있는지 확인합니다. 파일명이 다르면 Release asset을 다시 올리거나 Cask URL 규칙을 실제 파일명에 맞춰 수정합니다.
+브라우저에서 `https://github.com/rookedsysc/kanvibe/releases/tag/1.0.0`을 열고 asset 목록에 `KanVibe-1.0.0.dmg`가 있는지 확인합니다. 파일명이 다르면 Release asset을 다시 올리거나 Cask URL 규칙을 실제 파일명에 맞춰 수정합니다.
 
 ### `sha256 mismatch`가 납니다
 

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ReleaseUpdateDialog from "@/desktop/renderer/components/ReleaseUpdateDialog";
 import type { ReleaseUpdateCheckResult } from "@/desktop/renderer/actions/releaseUpdates";
@@ -40,10 +40,10 @@ function createUpdateResult(version = "1.1.0", body = "Release notes"): ReleaseU
     isUpdateAvailable: true,
     release: {
       version,
-      tagName: `v${version}`,
+      tagName: version,
       name: `KanVibe ${version}`,
       body,
-      htmlUrl: `https://github.com/rookedsysc/kanvibe/releases/tag/v${version}`,
+      htmlUrl: `https://github.com/rookedsysc/kanvibe/releases/tag/${version}`,
       publishedAt: "2026-05-10T00:00:00Z",
     },
   };
@@ -77,7 +77,7 @@ describe("ReleaseUpdateDialog", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeTruthy();
     expect(dialog.closest("[data-shortcut-capture='true']")).toBeTruthy();
-    expect(document.activeElement).toBe(dialog);
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
     expect(screen.getByText("common.releaseUpdate.title:1.1.0")).toBeTruthy();
     expect(screen.getByText("KanVibe 1.1.0")).toBeTruthy();
     expect(screen.getByText("Release notes")).toBeTruthy();
@@ -190,7 +190,7 @@ describe("ReleaseUpdateDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "common.releaseUpdate.viewRelease" }));
 
     expect(openSpy).toHaveBeenCalledWith(
-      "https://github.com/rookedsysc/kanvibe/releases/tag/v1.1.0",
+      "https://github.com/rookedsysc/kanvibe/releases/tag/1.1.0",
       "_blank",
       "noopener,noreferrer",
     );
