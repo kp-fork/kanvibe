@@ -180,6 +180,17 @@ const DEFAULT_DETAIL_STATE: Omit<TaskDetailState, "task"> = {
   doneAlertDismissed: false,
 };
 
+function getBranchTodoDefaultsFromTask(task: TaskDetailState["task"] | null): BranchTodoDefaults | null {
+  if (!task?.projectId) {
+    return null;
+  }
+
+  return {
+    projectId: task.projectId,
+    baseBranch: task.branchName || task.baseBranch || "",
+  };
+}
+
 function getTaskDetailRouteCacheKey(taskId: string) {
   return buildRouteCacheKey("task-detail", taskId);
 }
@@ -335,6 +346,7 @@ export default function TaskDetailRoute() {
   const [state, setState] = useState<TaskDetailState | null | undefined>(cachedState ?? undefined);
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
   const [createTaskDefaults, setCreateTaskDefaults] = useState<BranchTodoDefaults | null>(null);
+  const currentTaskRef = useRef<TaskDetailState["task"] | null>(cachedState?.task ?? null);
   const needsMacDesktopHeaderOffset = useMemo(() => {
     const isDesktopApp = window.kanvibeDesktop?.isDesktop === true;
     const isMacDesktop = navigator.userAgent.includes("Mac") || navigator.platform.toLowerCase().includes("mac");
@@ -350,6 +362,7 @@ export default function TaskDetailRoute() {
   const hasTerminal = !!(state?.task.sessionType && state.task.sessionName);
   const shortcutPlatform = getCurrentShortcutPlatform();
   const statusPanelLabel = `${t("actions")} · ${t("hooksStatus")}`;
+  currentTaskRef.current = state?.task ?? null;
   const shouldShowDefaultOverviewPanel = !!state
     && state !== null
     && resolvedSidebarDefaultCollapsed === false
@@ -473,15 +486,10 @@ export default function TaskDetailRoute() {
     },
     openProjectFilter() {},
     openCreateTaskModal(defaults) {
-      setCreateTaskDefaults(defaults ?? (state?.task.projectId
-        ? {
-            projectId: state.task.projectId,
-            baseBranch: state.task.branchName || state.task.baseBranch || "",
-          }
-        : null));
+      setCreateTaskDefaults(defaults ?? getBranchTodoDefaultsFromTask(currentTaskRef.current));
       setIsCreateTaskModalOpen(true);
     },
-  }), [boardCommands, state?.task.baseBranch, state?.task.branchName, state?.task.projectId]);
+  }), [boardCommands]);
 
   useEffect(() => {
     commonTranslationsRef.current = tc;

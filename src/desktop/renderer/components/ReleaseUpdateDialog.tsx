@@ -20,7 +20,6 @@ import {
   getReleaseUpdateDismissedVersions,
 } from "@/desktop/renderer/actions/appSettings";
 import { useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
-import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const RELEASE_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const RELEASE_NOTES_SANITIZE_CONFIG = {
@@ -143,8 +142,6 @@ export default function ReleaseUpdateDialog() {
     setShouldDismissReleaseVersion(false);
   }, [release, shouldDismissReleaseVersion]);
 
-  useEscapeKey(closeDialog, { enabled: Boolean(release) });
-
   useEffect(() => {
     if (!release) {
       return;
@@ -195,7 +192,16 @@ export default function ReleaseUpdateDialog() {
     closeDialog();
   }
 
-  function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+  function handleModalKeyDownCapture(event: ReactKeyboardEvent<HTMLElement>) {
+    event.stopPropagation();
+    event.nativeEvent.stopImmediatePropagation?.();
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+
     if (event.key !== "Tab") {
       return;
     }
@@ -235,6 +241,7 @@ export default function ReleaseUpdateDialog() {
     <div
       data-shortcut-capture="true"
       data-terminal-focus-blocker="true"
+      onKeyDownCapture={handleModalKeyDownCapture}
       className="fixed inset-0 z-[540] flex items-center justify-center bg-bg-overlay px-4 py-8"
     >
       <button
@@ -249,7 +256,6 @@ export default function ReleaseUpdateDialog() {
         aria-modal="true"
         aria-labelledby="release-update-title"
         tabIndex={-1}
-        onKeyDown={handleDialogKeyDown}
         className="relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border-default bg-bg-surface shadow-2xl"
       >
         <div className="border-b border-border-subtle px-5 py-4">

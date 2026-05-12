@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationCenterButton, { type NotificationCenterButtonHandle } from "@/components/NotificationCenterButton";
+import { BoardCommandProvider, useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
 
 const { mockListNotifications, mockMarkNotificationRead, mockMarkAllNotificationsRead, mockActivateNotification, mockGetTaskById, mockRedirect } = vi.hoisted(() => ({
   mockListNotifications: vi.fn(),
@@ -36,6 +37,11 @@ vi.mock("@/desktop/renderer/navigation", () => ({
     href.startsWith("/") ? `/${currentLocale}${href}` : href
   ),
   redirect: mockRedirect,
+  useRouter: () => ({
+    back: vi.fn(),
+    forward: vi.fn(),
+    push: vi.fn(),
+  }),
 }));
 
 function NotificationShortcutHarness() {
@@ -48,6 +54,23 @@ function NotificationShortcutHarness() {
       </button>
       <NotificationCenterButton ref={notificationCenterRef} />
     </>
+  );
+}
+
+function ShortcutBlocker() {
+  const boardCommands = useBoardCommands();
+
+  useEffect(() => boardCommands.registerShortcutBlocker(), [boardCommands]);
+
+  return null;
+}
+
+function BlockedNotificationShortcutHarness() {
+  return (
+    <BoardCommandProvider>
+      <ShortcutBlocker />
+      <NotificationShortcutHarness />
+    </BoardCommandProvider>
   );
 }
 
@@ -347,6 +370,36 @@ describe("NotificationCenterButton", () => {
       expect(openWindow).toHaveBeenCalledWith(`${window.location.origin}/#/en/task/task-1`, "_blank", "noopener,noreferrer");
     });
     expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it("ignores keyboard navigation while a shortcut blocker is active", async () => {
+    mockListNotifications.mockResolvedValue([
+      {
+        id: "n1",
+        title: "First task",
+        body: "Body",
+        taskId: "task-1",
+        relativePath: "/task/task-1",
+        locale: "en",
+        isRead: false,
+        createdAt: "2026-05-04T00:01:00.000Z",
+        dedupeKey: "k1",
+      },
+    ]);
+
+    render(<BlockedNotificationShortcutHarness />);
+
+    await waitFor(() => {
+      expect(mockListNotifications).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "open notification shortcut" }));
+    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(mockGetTaskById).not.toHaveBeenCalled();
+    expect(mockRedirect).not.toHaveBeenCalled();
+    expect(screen.getByText("First task")).toBeTruthy();
   });
 
   it("uses activation bridge for background sync review notifications", async () => {

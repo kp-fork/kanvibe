@@ -150,6 +150,26 @@ describe("ReleaseUpdateDialog", () => {
     expect(document.activeElement).toBe(viewReleaseButton);
   });
 
+  it("keeps modal key events from reaching window listeners", async () => {
+    const windowKeyDown = vi.fn();
+    mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
+    window.addEventListener("keydown", windowKeyDown);
+
+    render(<ReleaseUpdateDialog />);
+
+    const dialog = await screen.findByRole("dialog");
+    const closeButton = screen.getByRole("button", { name: "common.close" });
+
+    fireEvent.keyDown(closeButton, { key: "Enter" });
+    expect(windowKeyDown).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(windowKeyDown).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    window.removeEventListener("keydown", windowKeyDown);
+  });
+
   it("does not persist a version when the don't show again checkbox is unchecked", async () => {
     mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
 

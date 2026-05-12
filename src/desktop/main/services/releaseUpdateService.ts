@@ -8,6 +8,7 @@ import {
 
 const KANVIBE_RELEASES_API_URL = "https://api.github.com/repos/rookedsysc/kanvibe/releases";
 const DEVELOPMENT_APP_VERSION = "0.0.0";
+const RELEASE_UPDATE_CHECK_CACHE_MS = 60 * 60 * 1000;
 
 interface GitHubReleaseResponse {
   tag_name?: unknown;
@@ -39,6 +40,15 @@ interface ComparableReleaseUpdate {
   release: ReleaseUpdate;
   version: ReleaseVersion;
 }
+
+interface CachedReleaseUpdateCheck {
+  checkedAt: number;
+  result: ReleaseUpdateCheckResult;
+}
+
+let pendingReleaseUpdateCheck: Promise<ReleaseUpdateCheckResult> | null = null;
+let cachedReleaseUpdateCheck: CachedReleaseUpdateCheck | null = null;
+const shownReleaseVersions = new Set<string>();
 
 export function getCurrentReleaseVersion(): string {
   if (process.env.KANVIBE_RENDERER_URL) {
@@ -121,7 +131,41 @@ async function fetchGitHubReleases(): Promise<GitHubReleaseResponse[]> {
   return body as GitHubReleaseResponse[];
 }
 
-export async function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult> {
+function hideReleaseUpdate(result: ReleaseUpdateCheckResult): ReleaseUpdateCheckResult {
+  return {
+    ...result,
+    isUpdateAvailable: false,
+    release: null,
+  };
+}
+
+function consumeReleaseUpdateResult(result: ReleaseUpdateCheckResult): ReleaseUpdateCheckResult {
+  if (!result.isUpdateAvailable || !result.release) {
+    return result;
+  }
+
+  if (shownReleaseVersions.has(result.release.version)) {
+    return hideReleaseUpdate(result);
+  }
+
+  shownReleaseVersions.add(result.release.version);
+  return result;
+}
+
+function getCachedReleaseUpdateCheck(): ReleaseUpdateCheckResult | null {
+  if (!cachedReleaseUpdateCheck) {
+    return null;
+  }
+
+  if (Date.now() - cachedReleaseUpdateCheck.checkedAt >= RELEASE_UPDATE_CHECK_CACHE_MS) {
+    cachedReleaseUpdateCheck = null;
+    return null;
+  }
+
+  return cachedReleaseUpdateCheck.result;
+}
+
+async function createReleaseUpdateCheck(): Promise<ReleaseUpdateCheckResult> {
   const currentVersion = getCurrentReleaseVersion();
 
   try {
@@ -141,4 +185,29 @@ export async function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult>
       error: getErrorMessage(error),
     };
   }
+}
+
+export async function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult> {
+  const cachedResult = getCachedReleaseUpdateCheck();
+  if (cachedResult) {
+    return consumeReleaseUpdateResult(cachedResult);
+  }
+
+  if (!pendingReleaseUpdateCheck) {
+    pendingReleaseUpdateCheck = createReleaseUpdateCheck().then((result) => {
+      if (!result.error) {
+        cachedReleaseUpdateCheck = {
+          checkedAt: Date.now(),
+          result,
+        };
+      }
+
+      return result;
+    }).finally(() => {
+      pendingReleaseUpdateCheck = null;
+    });
+  }
+
+  const result = await pendingReleaseUpdateCheck;
+  return consumeReleaseUpdateResult(result);
 }

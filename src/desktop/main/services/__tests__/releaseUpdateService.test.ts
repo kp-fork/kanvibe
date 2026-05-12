@@ -126,4 +126,63 @@ describe("releaseUpdateService", () => {
       },
     });
   });
+
+  it("returns the same release only once across concurrent desktop windows", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([
+        {
+          tag_name: "1.0.2",
+          name: "New release",
+          body: "Release notes",
+          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.0.2",
+        },
+      ]),
+    } as unknown as Response);
+
+    const { checkForReleaseUpdate } = await import("@/desktop/main/services/releaseUpdateService");
+
+    const [firstResult, secondResult] = await Promise.all([
+      checkForReleaseUpdate(),
+      checkForReleaseUpdate(),
+    ]);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(firstResult).toMatchObject({
+      isUpdateAvailable: true,
+      release: { version: "1.0.2" },
+    });
+    expect(secondResult).toMatchObject({
+      currentVersion: "1.0.0",
+      isUpdateAvailable: false,
+      release: null,
+    });
+  });
+
+  it("reuses the shared release check cache for later windows", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([
+        {
+          tag_name: "1.0.2",
+          name: "New release",
+          body: "Release notes",
+          html_url: "https://github.com/rookedsysc/kanvibe/releases/tag/1.0.2",
+        },
+      ]),
+    } as unknown as Response);
+
+    const { checkForReleaseUpdate } = await import("@/desktop/main/services/releaseUpdateService");
+
+    await expect(checkForReleaseUpdate()).resolves.toMatchObject({
+      isUpdateAvailable: true,
+      release: { version: "1.0.2" },
+    });
+    await expect(checkForReleaseUpdate()).resolves.toMatchObject({
+      isUpdateAvailable: false,
+      release: null,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });
