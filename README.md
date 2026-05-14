@@ -87,75 +87,43 @@ Create follow-up branch TODOs directly from the highlighted search result, prese
 
 ## Prerequisites
 
-The `kanvibe` CLI script automatically checks and installs missing dependencies. You can also install them manually:
-
 | Dependency | Version | Required | Install |
 |------------|---------|----------|---------|
-| [Node.js](https://nodejs.org/) | 24.x | Yes | `brew install node@24` |
-| [pnpm](https://pnpm.io/) | latest | Yes | `corepack enable && corepack prepare pnpm@latest --activate` |
 | [git](https://git-scm.com/) | latest | Yes | `brew install git` |
 | [tmux](https://github.com/tmux/tmux) | latest | Yes | `brew install tmux` |
 | [gh](https://cli.github.com/) | latest | Yes | `brew install gh` (requires `gh auth login`) |
 | [zellij](https://github.com/zellij-org/zellij) | latest | No | `brew install zellij` |
 
-> KanVibe now uses an embedded SQLite database. Docker is no longer required.
-
 ---
 
 ## Quick Start
 
-### 1. Configure Environment
+### Install with Homebrew
+
+Until KanVibe is accepted into the official Homebrew Cask repository, install it from the KanVibe Homebrew tap:
 
 ```bash
-cp .env.example .env
+brew install --cask rookedsysc/kanvibe/kanvibe
+open -a KanVibe
 ```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Web server port | `4885` |
-| `KANVIBE_USER` | Login username | `admin` |
-| `KANVIBE_PASSWORD` | Login password | `changeme` (change this!) |
-
-### 2. Run
+After the official Homebrew Cask is accepted, the install command becomes:
 
 ```bash
-bash kanvibe.sh start          # Interactive mode selection (foreground/background)
-bash kanvibe.sh start --fg     # Foreground (output to terminal, Ctrl+C to stop)
-bash kanvibe.sh start --bg     # Background (server keeps running after terminal closes)
+brew install --cask kanvibe
 ```
 
-This command checks dependencies (with i18n install prompts), installs packages, prepares the embedded SQLite database, builds, and launches the server.
+### Update or Remove
 
 ```bash
-bash kanvibe.sh stop
+brew update
+brew upgrade --cask kanvibe
 ```
-
-Stops the KanVibe server.
-
-Open `http://localhost:4885` in your browser.
-
-### Desktop App Build (DMG / Homebrew-ready)
 
 ```bash
-pnpm dist
+brew uninstall --cask kanvibe
+brew untap rookedsysc/kanvibe
 ```
-
-This builds the renderer bundle, compiles the desktop main process into `build/main`, generates the bundled seed database, and packages a desktop app through Electron Builder.
-
-- macOS output: `dist/*.dmg`
-- Homebrew distribution: use the generated DMG artifact in a custom Homebrew Cask tap
-- Homebrew template: `distribution/homebrew/kanvibe.rb.template`
-
-### Native Module Recovery
-
-If macOS shows a `better-sqlite3` `NODE_MODULE_VERSION` mismatch, KanVibe now verifies the binding before startup and attempts an automatic rebuild when possible.
-
-- browser/server runtime: `pnpm rebuild better-sqlite3`
-- desktop runtime: `pnpm exec electron-rebuild -f --build-from-source --only better-sqlite3`
-
-For local desktop runs, `pnpm start` and `pnpm dev` already perform this compatibility check before Electron launches.
-
-Always run these commands under Node 24.x.
 
 ---
 

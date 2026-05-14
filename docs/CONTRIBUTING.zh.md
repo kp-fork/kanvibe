@@ -36,6 +36,17 @@ pnpm dev
 
 在浏览器中打开 `http://localhost:4885`。
 
+### 发布构建
+
+```bash
+pnpm dist
+```
+
+该命令会构建 renderer bundle，将桌面 main process 编译到 `build/main`，生成随包附带的 seed DB，并通过 Electron Builder 打包 macOS DMG。
+
+- macOS 输出：`dist/KanVibe-${version}.dmg`
+- Homebrew cask：更新 `Casks/kanvibe.rb`
+
 ---
 
 ## Pull Request 指南

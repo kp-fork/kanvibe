@@ -36,6 +36,17 @@ pnpm dev
 
 브라우저에서 `http://localhost:4885` 접속.
 
+### 릴리스 빌드
+
+```bash
+pnpm dist
+```
+
+이 명령은 renderer 번들을 빌드하고, 데스크톱 main process를 `build/main`으로 컴파일하고, 번들 seed DB를 생성한 뒤 Electron Builder로 macOS DMG를 패키징합니다.
+
+- macOS 산출물: `dist/KanVibe-${version}.dmg`
+- Homebrew cask: `Casks/kanvibe.rb` 갱신
+
 ---
 
 ## Pull Request 가이드

@@ -83,7 +83,7 @@
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.4",
-    "electron": "^37.2.6",
+    "electron": "^32.3.3",
     "electron-builder": "^26.0.12",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",

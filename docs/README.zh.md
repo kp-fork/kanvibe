@@ -35,75 +35,47 @@
 
 ## 前置要求
 
-`kanvibe` CLI 脚本会自动检查并安装缺失的依赖项。也可以手动安装：
+通过 Homebrew 安装不需要 Node.js 或 pnpm。KanVibe 作为 macOS 桌面应用运行，并使用本地开发工具处理任务会话和仓库工作流：
 
 | 依赖 | 版本 | 必需 | 安装 |
 |------|------|------|------|
-| [Node.js](https://nodejs.org/) | 24.x | Yes | `brew install node@24` |
-| [pnpm](https://pnpm.io/) | 最新 | Yes | `corepack enable && corepack prepare pnpm@latest --activate` |
 | [git](https://git-scm.com/) | 最新 | Yes | `brew install git` |
 | [tmux](https://github.com/tmux/tmux) | 最新 | Yes | `brew install tmux` |
 | [gh](https://cli.github.com/) | 最新 | Yes | `brew install gh`（需要 `gh auth login`） |
 | [zellij](https://github.com/zellij-org/zellij) | 最新 | No | `brew install zellij` |
 
-> KanVibe 现在使用内置 SQLite 数据库，不再依赖 Docker。
+只有在从源码开发或构建 KanVibe 时，才需要 Node.js 24.x 和 pnpm。
 
 ---
 
 ## 快速开始
 
-### 1. 配置环境变量
+### 使用 Homebrew 安装
+
+在 KanVibe 被官方 Homebrew Cask 仓库收录之前，请从 KanVibe Homebrew tap 安装：
 
 ```bash
-cp .env.example .env
+brew install --cask rookedsysc/kanvibe/kanvibe
+open -a KanVibe
 ```
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `PORT` | Web 服务器端口 | `4885` |
-| `KANVIBE_USER` | 登录用户名 | `admin` |
-| `KANVIBE_PASSWORD` | 登录密码 | `changeme`（请修改！） |
-
-### 2. 运行
+官方 Homebrew Cask 收录后，可以用下面的一行命令安装：
 
 ```bash
-bash kanvibe.sh start          # 交互式模式选择（前台/后台）
-bash kanvibe.sh start --fg     # 前台运行（输出到终端，Ctrl+C 停止）
-bash kanvibe.sh start --bg     # 后台运行（关闭终端后服务器继续运行）
+brew install --cask kanvibe
 ```
 
-此命令会检查依赖项（带有 i18n 安装提示）、安装包、准备内置 SQLite 数据库、构建并启动服务器。
+### 更新或移除
 
 ```bash
-bash kanvibe.sh stop
+brew update
+brew upgrade --cask kanvibe
 ```
-
-停止 KanVibe 服务器。
-
-在浏览器中打开 `http://localhost:4885`。
-
-### 桌面应用构建（DMG / Homebrew 分发）
 
 ```bash
-pnpm dist
+brew uninstall --cask kanvibe
+brew untap rookedsysc/kanvibe
 ```
-
-该命令会构建 renderer bundle，将桌面 main process 编译到 `build/main`，生成随包附带的 seed DB，并通过 Electron Builder 打包桌面应用。
-
-- macOS 输出：`dist/*.dmg`、`dist/*.zip`
-- Homebrew 分发：将生成的 DMG 产物接入自定义 Homebrew Cask tap 即可
-- Homebrew 模板：`distribution/homebrew/kanvibe.rb.template`
-
-### 原生模块恢复
-
-如果 macOS 上出现 `better-sqlite3` 的 `NODE_MODULE_VERSION` 不匹配，KanVibe 现在会在启动前先验证绑定，并在可能时自动尝试重建。
-
-- 浏览器/服务器运行时：`pnpm rebuild better-sqlite3`
-- 桌面运行时：`pnpm exec electron-rebuild -f --build-from-source --only better-sqlite3`
-
-对于本地桌面运行，`pnpm start` 和 `pnpm dev` 会在 Electron 启动前先执行这项兼容性检查。
-
-请务必在 Node 24.x 下执行这些命令。
 
 ---
 
