@@ -5,6 +5,7 @@ import * as hooks from "@/desktop/main/services/hookService";
 import * as kanban from "@/desktop/main/services/kanbanService";
 import * as paneLayout from "@/desktop/main/services/paneLayoutService";
 import * as project from "@/desktop/main/services/projectService";
+import * as releaseUpdates from "@/desktop/main/services/releaseUpdateService";
 import * as sessionDependency from "@/desktop/main/services/sessionDependencyService";
 
 export const desktopServices = {
@@ -15,6 +16,7 @@ export const desktopServices = {
   kanban,
   paneLayout,
   project,
+  releaseUpdates,
   sessionDependency,
 } as const;
 

@@ -36,6 +36,17 @@ pnpm dev
 
 Open `http://localhost:4885` in your browser.
 
+### Release Build
+
+```bash
+pnpm dist
+```
+
+This builds the renderer bundle, compiles the desktop main process into `build/main`, generates the bundled seed database, and packages the macOS DMG through Electron Builder.
+
+- macOS output: `dist/KanVibe-${version}.dmg`
+- Homebrew cask: update `Casks/kanvibe.rb`
+
 ---
 
 ## Pull Request Guidelines

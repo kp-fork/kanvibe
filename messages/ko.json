@@ -53,6 +53,14 @@
       "worktreeFailure": "Worktree sync 실패",
       "emptyMerged": "이번 검토에서 Done으로 옮길 merge PR이 없습니다.",
       "emptyRegistered": "이번 검토에서 새로 등록된 worktree가 없습니다."
+    },
+    "releaseUpdate": {
+      "eyebrow": "새 릴리스",
+      "title": "KanVibe {version} 업데이트",
+      "emptyBody": "이 릴리스에는 별도 노트가 없습니다.",
+      "viewRelease": "릴리스 보기",
+      "dontShowVersionAgain": "이 버전 다시 보지 않기",
+      "dismissOverlay": "업데이트 dialog 닫기"
     }
   },
   "board": {

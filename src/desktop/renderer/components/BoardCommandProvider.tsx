@@ -39,6 +39,7 @@ interface BoardCommandContextValue {
   canCreateBranchTodo: boolean;
   registerBoardHandlers: (handlers: BoardCommandHandlers) => () => void;
   registerNotificationCenterHandler: (handler: () => void) => () => void;
+  registerShortcutBlocker: () => () => void;
   requestCreateBranchTodo: (defaults: BranchTodoDefaults) => void;
   setTaskQuickSearchOpen: (isOpen: boolean) => void;
 }
@@ -48,11 +49,13 @@ const defaultBoardCommandContextValue: BoardCommandContextValue = {
   canCreateBranchTodo: false,
   registerBoardHandlers: () => noopDisposer,
   registerNotificationCenterHandler: () => noopDisposer,
+  registerShortcutBlocker: () => noopDisposer,
   requestCreateBranchTodo: () => {},
   setTaskQuickSearchOpen: () => {},
 };
 
 const BoardCommandContext = createContext<BoardCommandContextValue | null>(null);
+const BoardShortcutBlockerContext = createContext(false);
 
 function shouldIgnoreGlobalShortcut(eventTarget: EventTarget | null) {
   if (!(eventTarget instanceof Element)) {
@@ -78,9 +81,12 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
   const router = useRouter();
   const handlersRef = useRef<BoardCommandHandlers | null>(null);
   const notificationCenterHandlerRef = useRef<(() => void) | null>(null);
+  const shortcutBlockerTokensRef = useRef<Set<symbol>>(new Set());
   const [canCreateBranchTodo, setCanCreateBranchTodo] = useState(false);
   const [isTaskQuickSearchOpen, setIsTaskQuickSearchOpen] = useState(false);
+  const [shortcutBlockerCount, setShortcutBlockerCount] = useState(0);
   const shortcutPlatform = getCurrentShortcutPlatform();
+  const hasShortcutBlocker = shortcutBlockerCount > 0;
 
   const registerBoardHandlers = useCallback((handlers: BoardCommandHandlers) => {
     handlersRef.current = handlers;
@@ -117,6 +123,18 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
     setIsTaskQuickSearchOpen(isOpen);
   }, []);
 
+  const registerShortcutBlocker = useCallback(() => {
+    const token = Symbol("shortcut-blocker");
+    shortcutBlockerTokensRef.current.add(token);
+    setShortcutBlockerCount(shortcutBlockerTokensRef.current.size);
+
+    return () => {
+      if (shortcutBlockerTokensRef.current.delete(token)) {
+        setShortcutBlockerCount(shortcutBlockerTokensRef.current.size);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     function handleGlobalKeyDown(event: KeyboardEvent) {
       if (isBlockedShortcutEvent(event, shortcutPlatform)) {
@@ -124,7 +142,7 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
         return;
       }
 
-      if (isTaskQuickSearchOpen || shouldIgnoreGlobalShortcut(event.target)) {
+      if (hasShortcutBlocker || isTaskQuickSearchOpen || shouldIgnoreGlobalShortcut(event.target)) {
         return;
       }
 
@@ -170,11 +188,11 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
     };
-  }, [isTaskQuickSearchOpen, router, shortcutPlatform]);
+  }, [hasShortcutBlocker, isTaskQuickSearchOpen, router, shortcutPlatform]);
 
   useEffect(() => {
     const unsubscribe = window.kanvibeDesktop?.onCreateTaskShortcut?.(() => {
-      if (isTaskQuickSearchOpen) {
+      if (hasShortcutBlocker || isTaskQuickSearchOpen) {
         return;
       }
 
@@ -184,11 +202,11 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
     return () => {
       unsubscribe?.();
     };
-  }, [isTaskQuickSearchOpen]);
+  }, [hasShortcutBlocker, isTaskQuickSearchOpen]);
 
   useEffect(() => {
     const unsubscribe = window.kanvibeDesktop?.onNotificationShortcut?.(() => {
-      if (isTaskQuickSearchOpen) {
+      if (hasShortcutBlocker || isTaskQuickSearchOpen) {
         return;
       }
 
@@ -198,23 +216,37 @@ export function BoardCommandProvider({ children }: PropsWithChildren) {
     return () => {
       unsubscribe?.();
     };
-  }, [isTaskQuickSearchOpen]);
+  }, [hasShortcutBlocker, isTaskQuickSearchOpen]);
 
   const value = useMemo<BoardCommandContextValue>(() => ({
     canCreateBranchTodo,
     registerBoardHandlers,
     registerNotificationCenterHandler,
+    registerShortcutBlocker,
     requestCreateBranchTodo,
     setTaskQuickSearchOpen,
-  }), [canCreateBranchTodo, registerBoardHandlers, registerNotificationCenterHandler, requestCreateBranchTodo, setTaskQuickSearchOpen]);
+  }), [
+    canCreateBranchTodo,
+    registerBoardHandlers,
+    registerNotificationCenterHandler,
+    registerShortcutBlocker,
+    requestCreateBranchTodo,
+    setTaskQuickSearchOpen,
+  ]);
 
   return (
     <BoardCommandContext.Provider value={value}>
-      {children}
+      <BoardShortcutBlockerContext.Provider value={hasShortcutBlocker}>
+        {children}
+      </BoardShortcutBlockerContext.Provider>
     </BoardCommandContext.Provider>
   );
 }
 
 export function useBoardCommands() {
   return useContext(BoardCommandContext) ?? defaultBoardCommandContextValue;
+}
+
+export function useHasBoardShortcutBlocker() {
+  return useContext(BoardShortcutBlockerContext);
 }

@@ -27,7 +27,11 @@ import {
   getTaskOpenCodeHooksStatus,
   getAllProjects,
 } from "@/desktop/renderer/actions/project";
-import { useBoardCommands, type BranchTodoDefaults } from "@/desktop/renderer/components/BoardCommandProvider";
+import {
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+  type BranchTodoDefaults,
+} from "@/desktop/renderer/components/BoardCommandProvider";
 import TerminalLoader from "@/desktop/renderer/components/TerminalLoader";
 import { fetchPrUrlWithPrompt } from "@/desktop/renderer/utils/fetchPrUrlWithPrompt";
 import {
@@ -176,6 +180,17 @@ const DEFAULT_DETAIL_STATE: Omit<TaskDetailState, "task"> = {
   doneAlertDismissed: false,
 };
 
+function getBranchTodoDefaultsFromTask(task: TaskDetailState["task"] | null): BranchTodoDefaults | null {
+  if (!task?.projectId) {
+    return null;
+  }
+
+  return {
+    projectId: task.projectId,
+    baseBranch: task.branchName || task.baseBranch || "",
+  };
+}
+
 function getTaskDetailRouteCacheKey(taskId: string) {
   return buildRouteCacheKey("task-detail", taskId);
 }
@@ -319,6 +334,7 @@ export default function TaskDetailRoute() {
   const { id = "" } = useParams();
   const router = useRouter();
   const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
   const t = useTranslations("taskDetail");
   const tc = useTranslations("common");
   const refreshSignal = useRefreshSignal(["all", "task-detail"]);
@@ -330,6 +346,7 @@ export default function TaskDetailRoute() {
   const [state, setState] = useState<TaskDetailState | null | undefined>(cachedState ?? undefined);
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
   const [createTaskDefaults, setCreateTaskDefaults] = useState<BranchTodoDefaults | null>(null);
+  const currentTaskRef = useRef<TaskDetailState["task"] | null>(cachedState?.task ?? null);
   const needsMacDesktopHeaderOffset = useMemo(() => {
     const isDesktopApp = window.kanvibeDesktop?.isDesktop === true;
     const isMacDesktop = navigator.userAgent.includes("Mac") || navigator.platform.toLowerCase().includes("mac");
@@ -345,6 +362,7 @@ export default function TaskDetailRoute() {
   const hasTerminal = !!(state?.task.sessionType && state.task.sessionName);
   const shortcutPlatform = getCurrentShortcutPlatform();
   const statusPanelLabel = `${t("actions")} · ${t("hooksStatus")}`;
+  currentTaskRef.current = state?.task ?? null;
   const shouldShowDefaultOverviewPanel = !!state
     && state !== null
     && resolvedSidebarDefaultCollapsed === false
@@ -468,15 +486,10 @@ export default function TaskDetailRoute() {
     },
     openProjectFilter() {},
     openCreateTaskModal(defaults) {
-      setCreateTaskDefaults(defaults ?? (state?.task.projectId
-        ? {
-            projectId: state.task.projectId,
-            baseBranch: state.task.branchName || state.task.baseBranch || "",
-          }
-        : null));
+      setCreateTaskDefaults(defaults ?? getBranchTodoDefaultsFromTask(currentTaskRef.current));
       setIsCreateTaskModalOpen(true);
     },
-  }), [boardCommands, state?.task.baseBranch, state?.task.branchName, state?.task.projectId]);
+  }), [boardCommands]);
 
   useEffect(() => {
     commonTranslationsRef.current = tc;
@@ -491,12 +504,22 @@ export default function TaskDetailRoute() {
 
     function handlePriorityHistoryShortcut(event: KeyboardEvent) {
       if (matchShortcutEvent(event, SHORTCUTS.pageBack, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
         consumeHistoryShortcut(event);
         router.back();
         return;
       }
 
       if (matchShortcutEvent(event, SHORTCUTS.pageForward, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
         consumeHistoryShortcut(event);
         router.forward();
       }
@@ -506,7 +529,7 @@ export default function TaskDetailRoute() {
     return () => {
       window.removeEventListener("keydown", handlePriorityHistoryShortcut, { capture: true });
     };
-  }, [router, shortcutPlatform]);
+  }, [hasShortcutBlocker, router, shortcutPlatform]);
 
   useEffect(() => {
     function consumeDockShortcut(event: KeyboardEvent) {
@@ -518,6 +541,11 @@ export default function TaskDetailRoute() {
     function handlePriorityDockShortcut(event: KeyboardEvent) {
       const shortcutIndex = matchTaskDetailDockShortcutEvent(event, shortcutPlatform);
       if (shortcutIndex === null) {
+        return;
+      }
+
+      if (hasShortcutBlocker) {
+        consumeDockShortcut(event);
         return;
       }
 
@@ -533,13 +561,17 @@ export default function TaskDetailRoute() {
     return () => {
       window.removeEventListener("keydown", handlePriorityDockShortcut, { capture: true });
     };
-  }, [activateDockItem, shortcutPlatform]);
+  }, [activateDockItem, hasShortcutBlocker, shortcutPlatform]);
 
   useEffect(() => (
     window.kanvibeDesktop?.onTaskDetailDockShortcut?.((shortcutIndex: number) => {
+      if (hasShortcutBlocker) {
+        return;
+      }
+
       activateDockItem(shortcutIndex);
     }) ?? undefined
-  ), [activateDockItem]);
+  ), [activateDockItem, hasShortcutBlocker]);
 
   useEffect(() => {
     if (currentTaskIdRef.current === id) {

@@ -26,12 +26,12 @@ extraResources:
 
 mac:
   icon: resources/icon.icns
+  minimumSystemVersion: "10.15.0"
   target:
     - dmg
-    - zip
 
 dmg:
   icon: resources/icon.icns
-  artifactName: "kanvibe.${ext}"
+  artifactName: "KanVibe-${version}.${ext}"
 
 publish: null

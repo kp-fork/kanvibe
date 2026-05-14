@@ -9,6 +9,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/desktop/renderer/actions/notifications";
+import { useHasBoardShortcutBlocker } from "@/desktop/renderer/components/BoardCommandProvider";
 import { redirect } from "@/desktop/renderer/navigation";
 import { requestActiveTerminalFocusAfterUiSettles } from "@/desktop/renderer/utils/terminalFocus";
 import { navigateToTaskDetail } from "@/desktop/renderer/utils/taskNavigation";
@@ -58,6 +59,7 @@ const NotificationCenterButton = forwardRef<NotificationCenterButtonHandle, Noti
   ref,
 ) {
   const t = useTranslations("common");
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -207,6 +209,10 @@ const NotificationCenterButton = forwardRef<NotificationCenterButtonHandle, Noti
     }
 
     function handleWindowKeyDown(event: KeyboardEvent) {
+      if (hasShortcutBlocker) {
+        return;
+      }
+
       if (shouldIgnoreKeyboardNavigation(event.target, containerRef.current)) {
         return;
       }
@@ -253,7 +259,7 @@ const NotificationCenterButton = forwardRef<NotificationCenterButtonHandle, Noti
     return () => {
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
-  }, [closePanel, handleNotificationClick, highlightedNotificationIndex, isOpen, notifications]);
+  }, [closePanel, handleNotificationClick, hasShortcutBlocker, highlightedNotificationIndex, isOpen, notifications]);
 
   async function handleMarkAllRead() {
     await markAllNotificationsRead();

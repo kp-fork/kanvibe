@@ -6,6 +6,7 @@ const SIDEBAR_COLLAPSED_KEY = "sidebar_default_collapsed";
 const SIDEBAR_HINT_DISMISSED_KEY = "sidebar_hint_dismissed";
 const NOTIFICATION_ENABLED_KEY = "notification_enabled";
 const NOTIFICATION_STATUSES_KEY = "notification_statuses";
+const RELEASE_UPDATE_DISMISSED_VERSIONS_KEY = "release_update_dismissed_versions";
 
 /** 기본 알림 대상 상태 (사용자가 직접 설정하는 todo/done은 제외) */
 const DEFAULT_NOTIFICATION_STATUSES = ["progress", "pending", "review"];
@@ -72,6 +73,52 @@ export async function getDoneAlertDismissed(): Promise<boolean> {
 /** Done 이동 경고를 다시 묻지 않기로 설정한다 */
 export async function dismissDoneAlert(): Promise<void> {
   await setAppSetting(DONE_ALERT_DISMISSED_KEY, "true");
+}
+
+function parseDismissedReleaseVersions(value: string | null): string[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsedValue = JSON.parse(value);
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    return Array.from(new Set(
+      parsedValue
+        .filter((version): version is string => typeof version === "string")
+        .map((version) => version.trim())
+        .filter(Boolean),
+    ));
+  } catch {
+    return [];
+  }
+}
+
+/** 다시 보지 않기로 설정한 release version 목록을 조회한다 */
+export async function getReleaseUpdateDismissedVersions(): Promise<string[]> {
+  const value = await getAppSetting(RELEASE_UPDATE_DISMISSED_VERSIONS_KEY);
+  return parseDismissedReleaseVersions(value);
+}
+
+/** 특정 release version의 업데이트 dialog를 다시 보지 않기로 저장한다 */
+export async function dismissReleaseUpdateVersion(version: string): Promise<void> {
+  const normalizedVersion = version.trim();
+  if (!normalizedVersion) {
+    return;
+  }
+
+  const dismissedVersions = await getReleaseUpdateDismissedVersions();
+  if (dismissedVersions.includes(normalizedVersion)) {
+    return;
+  }
+
+  await setAppSetting(
+    RELEASE_UPDATE_DISMISSED_VERSIONS_KEY,
+    JSON.stringify([...dismissedVersions, normalizedVersion]),
+  );
 }
 
 /** 알림 설정을 조회한다. 키가 없으면 기본값(전체 활성화)을 반환한다 */

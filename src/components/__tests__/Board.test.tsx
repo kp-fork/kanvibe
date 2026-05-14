@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useEffect, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -7,7 +7,11 @@ import { moveTaskToColumn, reorderTasks } from "@/desktop/renderer/actions/kanba
 import { SessionType, TaskStatus, type KanbanTask } from "@/entities/KanbanTask";
 import type { Project } from "@/entities/Project";
 import type { TasksByStatus } from "@/desktop/renderer/actions/kanban";
-import { BoardCommandProvider, useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
+import {
+  BoardCommandProvider,
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+} from "@/desktop/renderer/components/BoardCommandProvider";
 
 function mockNavigatorPlatform(platform: string) {
   Object.defineProperty(window.navigator, "platform", {
@@ -271,6 +275,19 @@ function BoardCommandRequester() {
   );
 }
 
+function BoardShortcutBlocker() {
+  const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
+
+  useEffect(() => boardCommands.registerShortcutBlocker(), [boardCommands]);
+
+  return (
+    <span data-testid="shortcut-blocker-state">
+      {hasShortcutBlocker ? "blocked" : "open"}
+    </span>
+  );
+}
+
 describe("Board defaultSessionType sync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -425,6 +442,39 @@ describe("Board defaultSessionType sync", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText("pageFind.placeholder")).toBeTruthy();
     });
+  });
+
+  it("shortcut blocker가 등록되어 있으면 Ctrl+F가 보드 검색 바를 열지 않는다", async () => {
+    render(
+      <MemoryRouter initialEntries={["/ko"]}>
+        <BoardCommandProvider>
+          <BoardShortcutBlocker />
+          <Board
+            initialTasks={createEmptyTasks()}
+            initialDoneTotal={0}
+            initialDoneLimit={20}
+            sshHosts={[]}
+            projects={[createProject()]}
+            sidebarDefaultCollapsed={false}
+            doneAlertDismissed={false}
+            notificationSettings={{ isEnabled: true, enabledStatuses: ["progress", "pending", "review"] }}
+            defaultSessionType={SessionType.TMUX}
+            taskSearchShortcut="Mod+Shift+O"
+          />
+        </BoardCommandProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("shortcut-blocker-state").textContent).toBe("blocked");
+    });
+
+    fireEvent.keyDown(window, {
+      key: "f",
+      ctrlKey: true,
+    });
+
+    expect(screen.queryByPlaceholderText("pageFind.placeholder")).toBeNull();
   });
 
   it("task focus가 없을 때 방향키를 누르면 페이지 스크롤 대신 첫 task로 focus를 진입시킨다", async () => {
