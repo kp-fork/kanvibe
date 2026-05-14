@@ -7,12 +7,14 @@ const RELEASE_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 const mocks = vi.hoisted(() => ({
   checkForReleaseUpdate: vi.fn(),
+  claimReleaseUpdateVersion: vi.fn(),
   getReleaseUpdateDismissedVersions: vi.fn(),
   dismissReleaseUpdateVersion: vi.fn(),
 }));
 
 vi.mock("@/desktop/renderer/actions/releaseUpdates", () => ({
   checkForReleaseUpdate: mocks.checkForReleaseUpdate,
+  claimReleaseUpdateVersion: mocks.claimReleaseUpdateVersion,
 }));
 
 vi.mock("@/desktop/renderer/actions/appSettings", () => ({
@@ -53,6 +55,7 @@ async function flushReleaseUpdateCheck() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -60,8 +63,10 @@ describe("ReleaseUpdateDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.checkForReleaseUpdate.mockResolvedValue(createNoUpdateResult());
+    mocks.claimReleaseUpdateVersion.mockResolvedValue(true);
     mocks.getReleaseUpdateDismissedVersions.mockResolvedValue([]);
     mocks.dismissReleaseUpdateVersion.mockResolvedValue(undefined);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -117,6 +122,37 @@ describe("ReleaseUpdateDialog", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(mocks.getReleaseUpdateDismissedVersions).toHaveBeenCalled();
+    expect(mocks.claimReleaseUpdateVersion).not.toHaveBeenCalled();
+  });
+
+  it("waits until the current window can present the release update before claiming it", async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
+
+    render(<ReleaseUpdateDialog />);
+
+    await flushReleaseUpdateCheck();
+    expect(mocks.checkForReleaseUpdate).not.toHaveBeenCalled();
+    expect(mocks.claimReleaseUpdateVersion).not.toHaveBeenCalled();
+
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    fireEvent.focus(window);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(mocks.checkForReleaseUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.claimReleaseUpdateVersion).toHaveBeenCalledWith("1.1.0");
+  });
+
+  it("does not show a release when another window already claimed it", async () => {
+    mocks.checkForReleaseUpdate.mockResolvedValueOnce(createUpdateResult("1.1.0"));
+    mocks.claimReleaseUpdateVersion.mockResolvedValueOnce(false);
+
+    render(<ReleaseUpdateDialog />);
+
+    await flushReleaseUpdateCheck();
+
+    expect(mocks.claimReleaseUpdateVersion).toHaveBeenCalledWith("1.1.0");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("stores the current release version when don't show again is checked", async () => {

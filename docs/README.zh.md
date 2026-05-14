@@ -35,16 +35,12 @@
 
 ## 前置要求
 
-通过 Homebrew 安装不需要 Node.js 或 pnpm。KanVibe 作为 macOS 桌面应用运行，并使用本地开发工具处理任务会话和仓库工作流：
-
 | 依赖 | 版本 | 必需 | 安装 |
 |------|------|------|------|
 | [git](https://git-scm.com/) | 最新 | Yes | `brew install git` |
 | [tmux](https://github.com/tmux/tmux) | 最新 | Yes | `brew install tmux` |
 | [gh](https://cli.github.com/) | 最新 | Yes | `brew install gh`（需要 `gh auth login`） |
 | [zellij](https://github.com/zellij-org/zellij) | 最新 | No | `brew install zellij` |
-
-只有在从源码开发或构建 KanVibe 时，才需要 Node.js 24.x 和 pnpm。
 
 ---
 

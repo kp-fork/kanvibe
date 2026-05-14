@@ -12,3 +12,7 @@ export type {
 export function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult> {
   return invokeDesktop("releaseUpdates", "checkForReleaseUpdate");
 }
+
+export function claimReleaseUpdateVersion(version: string): Promise<boolean> {
+  return invokeDesktop("releaseUpdates", "claimReleaseUpdateVersion", version);
+}

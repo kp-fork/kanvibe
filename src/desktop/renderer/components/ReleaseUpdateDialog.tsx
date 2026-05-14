@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useTranslations } from "next-intl";
 import {
+  claimReleaseUpdateVersion,
   checkForReleaseUpdate,
   type ReleaseUpdate,
 } from "@/desktop/renderer/actions/releaseUpdates";
@@ -65,6 +66,10 @@ function getFocusableDialogElements(dialog: HTMLElement) {
     .filter((element) => element.getAttribute("aria-hidden") !== "true");
 }
 
+function canShowReleaseUpdateDialog() {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
 function ReleaseNotesContent({ body, emptyMessage }: { body: string; emptyMessage: string }) {
   const releaseNotesHtml = useMemo(() => (
     body ? renderReleaseNotesHtml(body) : ""
@@ -102,7 +107,7 @@ export default function ReleaseUpdateDialog() {
   }, []);
 
   const runReleaseUpdateCheck = useCallback(async () => {
-    if (isCheckingRef.current) {
+    if (isCheckingRef.current || !canShowReleaseUpdateDialog()) {
       return;
     }
 
@@ -120,6 +125,11 @@ export default function ReleaseUpdateDialog() {
 
       if (await isReleaseVersionDismissed(nextRelease.version)) {
         shownReleaseVersionsRef.current.add(nextRelease.version);
+        return;
+      }
+
+      const didClaimReleaseUpdate = await claimReleaseUpdateVersion(nextRelease.version);
+      if (!didClaimReleaseUpdate) {
         return;
       }
 
@@ -173,9 +183,19 @@ export default function ReleaseUpdateDialog() {
     const intervalId = window.setInterval(() => {
       void runReleaseUpdateCheck();
     }, RELEASE_UPDATE_CHECK_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      void runReleaseUpdateCheck();
+    };
+    const handleFocus = () => {
+      void runReleaseUpdateCheck();
+    };
 
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
     return () => {
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
     };
   }, [runReleaseUpdateCheck]);
 

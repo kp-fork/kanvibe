@@ -139,7 +139,7 @@ function hideReleaseUpdate(result: ReleaseUpdateCheckResult): ReleaseUpdateCheck
   };
 }
 
-function consumeReleaseUpdateResult(result: ReleaseUpdateCheckResult): ReleaseUpdateCheckResult {
+function hideShownReleaseUpdateResult(result: ReleaseUpdateCheckResult): ReleaseUpdateCheckResult {
   if (!result.isUpdateAvailable || !result.release) {
     return result;
   }
@@ -148,8 +148,16 @@ function consumeReleaseUpdateResult(result: ReleaseUpdateCheckResult): ReleaseUp
     return hideReleaseUpdate(result);
   }
 
-  shownReleaseVersions.add(result.release.version);
   return result;
+}
+
+export function claimReleaseUpdateVersion(version: string): boolean {
+  if (!version || shownReleaseVersions.has(version)) {
+    return false;
+  }
+
+  shownReleaseVersions.add(version);
+  return true;
 }
 
 function getCachedReleaseUpdateCheck(): ReleaseUpdateCheckResult | null {
@@ -190,7 +198,7 @@ async function createReleaseUpdateCheck(): Promise<ReleaseUpdateCheckResult> {
 export async function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult> {
   const cachedResult = getCachedReleaseUpdateCheck();
   if (cachedResult) {
-    return consumeReleaseUpdateResult(cachedResult);
+    return hideShownReleaseUpdateResult(cachedResult);
   }
 
   if (!pendingReleaseUpdateCheck) {
@@ -209,5 +217,5 @@ export async function checkForReleaseUpdate(): Promise<ReleaseUpdateCheckResult>
   }
 
   const result = await pendingReleaseUpdateCheck;
-  return consumeReleaseUpdateResult(result);
+  return hideShownReleaseUpdateResult(result);
 }

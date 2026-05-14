@@ -127,7 +127,7 @@ describe("releaseUpdateService", () => {
     });
   });
 
-  it("returns the same release only once across concurrent desktop windows", async () => {
+  it("does not consume the same release before a desktop window claims it", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue([
@@ -154,12 +154,12 @@ describe("releaseUpdateService", () => {
     });
     expect(secondResult).toMatchObject({
       currentVersion: "1.0.0",
-      isUpdateAvailable: false,
-      release: null,
+      isUpdateAvailable: true,
+      release: { version: "1.0.2" },
     });
   });
 
-  it("reuses the shared release check cache for later windows", async () => {
+  it("hides a cached release after a desktop window claims it", async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue([
@@ -172,12 +172,17 @@ describe("releaseUpdateService", () => {
       ]),
     } as unknown as Response);
 
-    const { checkForReleaseUpdate } = await import("@/desktop/main/services/releaseUpdateService");
+    const {
+      checkForReleaseUpdate,
+      claimReleaseUpdateVersion,
+    } = await import("@/desktop/main/services/releaseUpdateService");
 
     await expect(checkForReleaseUpdate()).resolves.toMatchObject({
       isUpdateAvailable: true,
       release: { version: "1.0.2" },
     });
+    expect(claimReleaseUpdateVersion("1.0.2")).toBe(true);
+    expect(claimReleaseUpdateVersion("1.0.2")).toBe(false);
     await expect(checkForReleaseUpdate()).resolves.toMatchObject({
       isUpdateAvailable: false,
       release: null,
