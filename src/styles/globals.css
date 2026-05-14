@@ -1,0 +1,492 @@
+@import "tailwindcss";
+
+:root {
+  /* Primitive: Gray */
+  --gray-50: #FAFAFA;
+  --gray-100: #F5F5F5;
+  --gray-200: #EEEEEE;
+  --gray-300: #E0E0E0;
+  --gray-400: #BDBDBD;
+  --gray-500: #9E9E9E;
+  --gray-600: #757575;
+  --gray-700: #616161;
+  --gray-800: #424242;
+  --gray-900: #212121;
+
+  /* Primitive: Point Blue */
+  --point-blue: #0064FF;
+  --point-blue-hover: #0052D9;
+  --point-blue-active: #0044B8;
+  --point-blue-subtle: #EAF2FF;
+  --point-blue-muted: #D6E6FF;
+
+  /* Primitive: Button Gray */
+  --button-gray: #202632;
+  --button-gray-hover: #2A3242;
+  --button-gray-active: #161B24;
+  --button-gray-subtle: rgba(32, 38, 50, 0.1);
+
+  /* Primitive: Blue */
+  --blue-50: #E8F0FE;
+  --blue-100: #D2E3FC;
+  --blue-200: #AECBFA;
+  --blue-300: #8AB4F8;
+  --blue-400: #669DF6;
+  --blue-500: #4285F4;
+  --blue-600: #1A73E8;
+  --blue-700: #1967D2;
+  --blue-800: #185ABC;
+  --blue-900: #174EA6;
+
+  /* Primitive: Google Red */
+  --red-50: #FCE8E6;
+  --red-100: #FAD2CF;
+  --red-300: #F28B82;
+  --red-500: #EA4335;
+  --red-600: #D93025;
+  --red-700: #C5221F;
+
+  /* Primitive: Google Yellow */
+  --yellow-50: #FEF7E0;
+  --yellow-100: #FEEFC3;
+  --yellow-300: #FDD663;
+  --yellow-500: #FBBC05;
+  --yellow-600: #F9AB00;
+
+  /* Primitive: Google Green */
+  --green-50: #E6F4EA;
+  --green-100: #CEEAD6;
+  --green-300: #81C995;
+  --green-500: #34A853;
+  --green-600: #1E8E3E;
+  --green-700: #188038;
+
+  /* Semantic: Brand */
+  --color-brand-primary: var(--point-blue);
+  --color-brand-hover: var(--point-blue-hover);
+  --color-brand-active: var(--point-blue-active);
+  --color-brand-subtle: var(--point-blue-subtle);
+  --color-brand-muted: var(--point-blue-muted);
+  --color-button-neutral: var(--button-gray);
+  --color-button-neutral-hover: var(--button-gray-hover);
+  --color-button-neutral-active: var(--button-gray-active);
+  --color-button-neutral-subtle: var(--button-gray-subtle);
+
+  /* Semantic: Background */
+  --color-bg-page: var(--gray-50);
+  --color-bg-surface: #FFFFFF;
+  --color-bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* Semantic: Text */
+  --color-text-primary: #202124;
+  --color-text-secondary: #5F6368;
+  --color-text-muted: #9AA0A6;
+  --color-text-inverse: #FFFFFF;
+  --color-text-brand: var(--point-blue);
+  --color-text-link: var(--point-blue);
+
+  /* Semantic: Border */
+  --color-border-default: #DADCE0;
+  --color-border-subtle: var(--gray-100);
+  --color-border-strong: var(--gray-400);
+  --color-border-brand: var(--point-blue);
+
+  /* Semantic: Status */
+  --color-status-todo: var(--gray-500);
+  --color-status-progress: var(--yellow-500);
+  --color-status-pending: #8B5CF6;
+  --color-status-review: var(--point-blue);
+  --color-status-done: var(--green-500);
+  --color-status-success: var(--green-500);
+  --color-status-warning: var(--yellow-500);
+  --color-status-error: var(--red-500);
+  --color-status-info: var(--point-blue);
+
+  /* Semantic: Tags - Agent */
+  --color-tag-claude-bg: var(--red-50);
+  --color-tag-claude-text: var(--red-600);
+  --color-tag-gemini-bg: var(--blue-50);
+  --color-tag-gemini-text: var(--blue-600);
+  --color-tag-codex-bg: var(--green-50);
+  --color-tag-codex-text: var(--green-600);
+  --color-tag-session-bg: var(--color-button-neutral);
+  --color-tag-session-text: #FFFFFF;
+  --color-tag-ssh-bg: var(--green-50);
+  --color-tag-ssh-text: var(--green-700);
+  --color-tag-project-bg: var(--color-button-neutral);
+  --color-tag-project-text: #FFFFFF;
+  --color-tag-branch-bg: var(--gray-100);
+  --color-tag-branch-text: var(--gray-700);
+  --color-tag-neutral-bg: var(--gray-100);
+  --color-tag-neutral-text: var(--gray-600);
+  --color-tag-pr-bg: var(--color-brand-subtle);
+  --color-tag-pr-text: var(--color-brand-primary);
+  --color-tag-base-bg: var(--color-button-neutral);
+  --color-tag-base-text: #FFFFFF;
+
+  /* Semantic: Project Group (pastel) */
+  --color-group-0-border: #F9A8D4;
+  --color-group-0-bg: #FDF2F8;
+  --color-group-1-border: #93C5FD;
+  --color-group-1-bg: #EFF6FF;
+  --color-group-2-border: #86EFAC;
+  --color-group-2-bg: #F0FDF4;
+  --color-group-3-border: #C4B5FD;
+  --color-group-3-bg: #F5F3FF;
+  --color-group-4-border: #FDBA74;
+  --color-group-4-bg: #FFF7ED;
+  --color-group-5-border: #FDE047;
+  --color-group-5-bg: #FEFCE8;
+  --color-group-6-border: #5EEAD4;
+  --color-group-6-bg: #F0FDFA;
+  --color-group-7-border: #A5B4FC;
+  --color-group-7-bg: #EEF2FF;
+  --color-group-line: var(--gray-400);
+
+  /* Semantic: Priority */
+  --color-priority-low-bg: var(--blue-50);
+  --color-priority-low-text: var(--blue-600);
+  --color-priority-medium-bg: #FFF3E0;
+  --color-priority-medium-text: #E65100;
+  --color-priority-high-bg: var(--red-50);
+  --color-priority-high-text: var(--red-600);
+
+  /* Terminal Chrome */
+  --color-terminal-chrome: #1e1e1e;
+  --color-terminal-bg: #0a0a0a;
+  --color-terminal-text: #9ca3af;
+  --color-traffic-close: #ff5f56;
+  --color-traffic-minimize: #ffbd2e;
+  --color-traffic-maximize: #27c93f;
+
+  /* Terminal Chrome */
+  --color-terminal-chrome: #1e1e1e;
+  --color-terminal-bg: #0a0a0a;
+  --color-terminal-text: #9ca3af;
+  --color-traffic-close: #ff5f56;
+  --color-traffic-minimize: #ffbd2e;
+  --color-traffic-maximize: #27c93f;
+
+  /* Shadows */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-kanban-task-focus: 0 0 0 1px var(--color-border-brand), 0 0 0 5px var(--color-brand-muted), 0 12px 28px rgba(0, 100, 255, 0.22);
+
+  /* Border Radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+}
+
+:root,
+:root[data-theme="dark"] {
+  --color-brand-primary: var(--point-blue);
+  --color-brand-hover: #2B7DFF;
+  --color-brand-active: #0052D9;
+  --color-brand-subtle: rgba(0, 100, 255, 0.16);
+  --color-brand-muted: rgba(0, 100, 255, 0.24);
+  --color-button-neutral: var(--button-gray);
+  --color-button-neutral-hover: var(--button-gray-hover);
+  --color-button-neutral-active: var(--button-gray-active);
+  --color-button-neutral-subtle: rgba(32, 38, 50, 0.3);
+
+  --color-bg-page: #090a0d;
+  --color-bg-surface: #111216;
+  --color-bg-overlay: rgba(0, 0, 0, 0.62);
+
+  --color-text-primary: #f3f4f7;
+  --color-text-secondary: #b0b4bd;
+  --color-text-muted: #717680;
+  --color-text-inverse: #ffffff;
+  --color-text-brand: var(--point-blue);
+  --color-text-link: var(--point-blue);
+
+  --color-border-default: #24262d;
+  --color-border-subtle: #1a1c22;
+  --color-border-strong: #353842;
+  --color-border-brand: rgba(0, 100, 255, 0.62);
+
+  --color-status-todo: #747985;
+  --color-status-progress: #f6c35f;
+  --color-status-pending: #9b8cff;
+  --color-status-review: var(--point-blue);
+  --color-status-done: #65d08a;
+  --color-status-success: #65d08a;
+  --color-status-warning: #f6c35f;
+  --color-status-error: #ff7d73;
+  --color-status-info: var(--point-blue);
+
+  --color-tag-claude-bg: rgba(255, 125, 115, 0.12);
+  --color-tag-claude-text: #ffaaa2;
+  --color-tag-gemini-bg: rgba(110, 168, 255, 0.12);
+  --color-tag-gemini-text: #9fc8ff;
+  --color-tag-codex-bg: rgba(101, 208, 138, 0.12);
+  --color-tag-codex-text: #9be6b4;
+  --color-tag-session-bg: #ffffff;
+  --color-tag-session-text: #202124;
+  --color-tag-ssh-bg: rgba(101, 208, 138, 0.16);
+  --color-tag-ssh-text: #9be6b4;
+  --color-tag-project-bg: var(--color-button-neutral);
+  --color-tag-project-text: #ffffff;
+  --color-tag-branch-bg: rgba(255, 255, 255, 0.06);
+  --color-tag-branch-text: #aeb3bd;
+  --color-tag-neutral-bg: rgba(255, 255, 255, 0.07);
+  --color-tag-neutral-text: #aeb3bd;
+  --color-tag-pr-bg: var(--color-brand-subtle);
+  --color-tag-pr-text: var(--color-brand-primary);
+  --color-tag-base-bg: var(--color-button-neutral);
+  --color-tag-base-text: #ffffff;
+
+  --color-group-0-border: rgba(255, 154, 204, 0.4);
+  --color-group-0-bg: rgba(255, 154, 204, 0.08);
+  --color-group-1-border: rgba(147, 197, 253, 0.38);
+  --color-group-1-bg: rgba(147, 197, 253, 0.08);
+  --color-group-2-border: rgba(134, 239, 172, 0.36);
+  --color-group-2-bg: rgba(134, 239, 172, 0.08);
+  --color-group-3-border: rgba(196, 181, 253, 0.38);
+  --color-group-3-bg: rgba(196, 181, 253, 0.08);
+  --color-group-4-border: rgba(253, 186, 116, 0.34);
+  --color-group-4-bg: rgba(253, 186, 116, 0.08);
+  --color-group-5-border: rgba(253, 224, 71, 0.28);
+  --color-group-5-bg: rgba(253, 224, 71, 0.07);
+  --color-group-6-border: rgba(94, 234, 212, 0.34);
+  --color-group-6-bg: rgba(94, 234, 212, 0.08);
+  --color-group-7-border: rgba(165, 180, 252, 0.36);
+  --color-group-7-bg: rgba(165, 180, 252, 0.08);
+  --color-group-line: #3b3f49;
+
+  --color-priority-low-bg: var(--color-brand-subtle);
+  --color-priority-low-text: var(--color-brand-primary);
+  --color-priority-medium-bg: rgba(246, 195, 95, 0.13);
+  --color-priority-medium-text: #ffd58a;
+  --color-priority-high-bg: rgba(255, 125, 115, 0.13);
+  --color-priority-high-text: #ffaaa2;
+
+  --color-terminal-chrome: #0f1014;
+  --color-terminal-bg: #050608;
+  --color-terminal-text: #a0a7b4;
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.24);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.26);
+  --shadow-lg: 0 22px 60px rgba(0, 0, 0, 0.34);
+  --shadow-kanban-task-focus: 0 0 0 1px rgba(0, 100, 255, 0.95), 0 0 0 5px rgba(0, 100, 255, 0.38), 0 16px 36px rgba(0, 100, 255, 0.38);
+
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+}
+
+:root[data-theme="light"] {
+  --color-brand-primary: var(--point-blue);
+  --color-brand-hover: var(--point-blue-hover);
+  --color-brand-active: var(--point-blue-active);
+  --color-brand-subtle: var(--point-blue-subtle);
+  --color-brand-muted: var(--point-blue-muted);
+  --color-button-neutral: var(--button-gray);
+  --color-button-neutral-hover: var(--button-gray-hover);
+  --color-button-neutral-active: var(--button-gray-active);
+  --color-button-neutral-subtle: var(--button-gray-subtle);
+
+  --color-bg-page: #f7f8fa;
+  --color-bg-surface: #ffffff;
+  --color-bg-overlay: rgba(15, 17, 22, 0.42);
+
+  --color-text-primary: #17181c;
+  --color-text-secondary: #5f636d;
+  --color-text-muted: #8a909b;
+  --color-text-inverse: #ffffff;
+  --color-text-brand: var(--point-blue);
+  --color-text-link: var(--point-blue);
+
+  --color-border-default: #e2e4e8;
+  --color-border-subtle: #eef0f3;
+  --color-border-strong: #c8ccd3;
+  --color-border-brand: var(--point-blue);
+
+  --color-tag-project-bg: var(--color-button-neutral);
+  --color-tag-project-text: #ffffff;
+  --color-tag-pr-bg: var(--color-brand-subtle);
+  --color-tag-pr-text: var(--color-brand-primary);
+  --color-tag-session-bg: var(--color-button-neutral);
+  --color-tag-session-text: #ffffff;
+  --color-tag-ssh-bg: var(--green-50);
+  --color-tag-ssh-text: var(--green-700);
+  --color-tag-base-bg: var(--color-button-neutral);
+  --color-tag-base-text: #ffffff;
+  --color-group-line: #cdd1d8;
+
+  --shadow-xs: 0 1px 1px rgba(17, 24, 39, 0.04);
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 12px 28px rgba(17, 24, 39, 0.08);
+  --shadow-lg: 0 22px 60px rgba(17, 24, 39, 0.14);
+  --shadow-kanban-task-focus: 0 0 0 1px var(--color-border-brand), 0 0 0 5px rgba(0, 100, 255, 0.18), 0 12px 28px rgba(0, 100, 255, 0.22);
+}
+
+@theme inline {
+  /* Brand */
+  --color-brand-primary: var(--color-brand-primary);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-brand-active: var(--color-brand-active);
+  --color-brand-subtle: var(--color-brand-subtle);
+  --color-brand-muted: var(--color-brand-muted);
+  --color-button-neutral: var(--color-button-neutral);
+  --color-button-neutral-hover: var(--color-button-neutral-hover);
+  --color-button-neutral-active: var(--color-button-neutral-active);
+  --color-button-neutral-subtle: var(--color-button-neutral-subtle);
+
+  /* Background */
+  --color-bg-page: var(--color-bg-page);
+  --color-bg-surface: var(--color-bg-surface);
+  --color-bg-overlay: var(--color-bg-overlay);
+
+  /* Text */
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-inverse: var(--color-text-inverse);
+  --color-text-brand: var(--color-text-brand);
+  --color-text-link: var(--color-text-link);
+
+  /* Border */
+  --color-border-default: var(--color-border-default);
+  --color-border-subtle: var(--color-border-subtle);
+  --color-border-strong: var(--color-border-strong);
+  --color-border-brand: var(--color-border-brand);
+
+  /* Status */
+  --color-status-todo: var(--color-status-todo);
+  --color-status-progress: var(--color-status-progress);
+  --color-status-pending: var(--color-status-pending);
+  --color-status-review: var(--color-status-review);
+  --color-status-done: var(--color-status-done);
+  --color-status-success: var(--color-status-success);
+  --color-status-warning: var(--color-status-warning);
+  --color-status-error: var(--color-status-error);
+  --color-status-info: var(--color-status-info);
+
+  /* Tags */
+  --color-tag-claude-bg: var(--color-tag-claude-bg);
+  --color-tag-claude-text: var(--color-tag-claude-text);
+  --color-tag-gemini-bg: var(--color-tag-gemini-bg);
+  --color-tag-gemini-text: var(--color-tag-gemini-text);
+  --color-tag-codex-bg: var(--color-tag-codex-bg);
+  --color-tag-codex-text: var(--color-tag-codex-text);
+  --color-tag-session-bg: var(--color-tag-session-bg);
+  --color-tag-session-text: var(--color-tag-session-text);
+  --color-tag-ssh-bg: var(--color-tag-ssh-bg);
+  --color-tag-ssh-text: var(--color-tag-ssh-text);
+  --color-tag-project-bg: var(--color-tag-project-bg);
+  --color-tag-project-text: var(--color-tag-project-text);
+  --color-tag-branch-bg: var(--color-tag-branch-bg);
+  --color-tag-branch-text: var(--color-tag-branch-text);
+  --color-tag-neutral-bg: var(--color-tag-neutral-bg);
+  --color-tag-neutral-text: var(--color-tag-neutral-text);
+  --color-tag-pr-bg: var(--color-tag-pr-bg);
+  --color-tag-pr-text: var(--color-tag-pr-text);
+  --color-tag-base-bg: var(--color-tag-base-bg);
+  --color-tag-base-text: var(--color-tag-base-text);
+
+  /* Priority */
+  --color-priority-low-bg: var(--color-priority-low-bg);
+  --color-priority-low-text: var(--color-priority-low-text);
+  --color-priority-medium-bg: var(--color-priority-medium-bg);
+  --color-priority-medium-text: var(--color-priority-medium-text);
+  --color-priority-high-bg: var(--color-priority-high-bg);
+  --color-priority-high-text: var(--color-priority-high-text);
+
+  /* Project Group (pastel) */
+  --color-group-0-border: var(--color-group-0-border);
+  --color-group-0-bg: var(--color-group-0-bg);
+  --color-group-1-border: var(--color-group-1-border);
+  --color-group-1-bg: var(--color-group-1-bg);
+  --color-group-2-border: var(--color-group-2-border);
+  --color-group-2-bg: var(--color-group-2-bg);
+  --color-group-3-border: var(--color-group-3-border);
+  --color-group-3-bg: var(--color-group-3-bg);
+  --color-group-4-border: var(--color-group-4-border);
+  --color-group-4-bg: var(--color-group-4-bg);
+  --color-group-5-border: var(--color-group-5-border);
+  --color-group-5-bg: var(--color-group-5-bg);
+  --color-group-6-border: var(--color-group-6-border);
+  --color-group-6-bg: var(--color-group-6-bg);
+  --color-group-7-border: var(--color-group-7-border);
+  --color-group-7-bg: var(--color-group-7-bg);
+  --color-group-line: var(--color-group-line);
+
+  /* Terminal Chrome */
+  --color-terminal-chrome: var(--color-terminal-chrome);
+  --color-terminal-bg: var(--color-terminal-bg);
+  --color-terminal-text: var(--color-terminal-text);
+  --color-traffic-close: var(--color-traffic-close);
+  --color-traffic-minimize: var(--color-traffic-minimize);
+  --color-traffic-maximize: var(--color-traffic-maximize);
+
+  /* Terminal Chrome */
+  --color-terminal-chrome: var(--color-terminal-chrome);
+  --color-terminal-bg: var(--color-terminal-bg);
+  --color-terminal-text: var(--color-terminal-text);
+  --color-traffic-close: var(--color-traffic-close);
+  --color-traffic-minimize: var(--color-traffic-minimize);
+  --color-traffic-maximize: var(--color-traffic-maximize);
+
+  /* Shadows */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  /* Font */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+body {
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+* {
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+::selection {
+  background: var(--color-brand-muted);
+  color: var(--color-text-primary);
+}
+
+button,
+input,
+select,
+textarea {
+  letter-spacing: 0;
+}
+
+/* xterm 터미널이 컨테이너를 꽉 채우도록 강제 */
+.xterm {
+  height: 100%;
+}
+.xterm-viewport {
+  height: 100% !important;
+}
+.xterm-screen {
+  height: 100%;
+}
+
+[data-kanban-task-card="true"]:focus {
+  position: relative;
+  border-color: var(--color-border-brand) !important;
+  box-shadow: var(--shadow-kanban-task-focus);
+}

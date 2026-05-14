@@ -2,8 +2,10 @@
  * @vitest-environment node
  */
 import path from "path";
+import { spawnSync } from "child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SessionType } from "@/entities/KanbanTask";
+import { PaneLayoutType } from "@/entities/PaneLayoutConfig";
 
 // --- Mocks ---
 
@@ -21,15 +23,29 @@ vi.mock("fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs")>();
   return {
     ...actual,
-    existsSync: (...args: unknown[]) => mockExistsSync(...args),
+    existsSync: mockExistsSync,
   };
 });
 
+const mockHomedir = vi.fn(() => "/home/local-user");
+vi.mock("os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("os")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      homedir: mockHomedir,
+    },
+    homedir: mockHomedir,
+  };
+});
+
+const mockPtyWrite = vi.fn();
 const mockPtyOnData = vi.fn();
 const mockPtyOnExit = vi.fn();
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
-    write: vi.fn(),
+    write: mockPtyWrite,
     resize: vi.fn(),
     onData: mockPtyOnData,
     onExit: mockPtyOnExit,
@@ -53,6 +69,11 @@ function findExecSyncCall(pattern: string): string | undefined {
   return mockExecSync.mock.calls
     .map((call) => call[0] as string)
     .find((cmd) => cmd.includes(pattern));
+}
+
+function expectValidPosixShellSyntax(command: string): void {
+  const result = spawnSync("sh", ["-n", "-c", command], { encoding: "utf-8" });
+  expect(result.status, result.stderr).toBe(0);
 }
 
 describe("attachLocalSession — tmux 세션 자동 생성", () => {
@@ -85,6 +106,50 @@ describe("attachLocalSession — tmux 세션 자동 생성", () => {
     expect(newSessionCmd).toBeDefined();
     expect(newSessionCmd).toContain('-s "feat-login"');
     expect(newSessionCmd).toContain('-c "/workspace"');
+    const newSessionCall = mockExecSync.mock.calls.find((call) => String(call[0]).includes("new-session"));
+    expect(newSessionCall?.[1]).toEqual(expect.objectContaining({
+      env: expect.objectContaining({
+        PATH: process.platform === "darwin"
+          ? expect.stringContaining("/opt/homebrew/bin")
+          : expect.any(String),
+      }),
+    }));
+  });
+
+  it("should apply tmux pane layout commands when creating a local session", async () => {
+    // Given
+    const { attachLocalSession } = await import("@/lib/terminal");
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === "string" && cmd.includes("has-session")) {
+        throw new Error("session not found");
+      }
+      return "";
+    });
+
+    // When
+    await attachLocalSession(
+      "task-layout",
+      SessionType.TMUX,
+      "feat-login",
+      createMockWs(),
+      "/workspace",
+      120,
+      30,
+      {
+        layoutType: PaneLayoutType.VERTICAL_2,
+        panes: [
+          { position: 0, command: "pnpm dev" },
+          { position: 1, command: "pnpm test" },
+        ],
+      },
+    );
+
+    // Then
+    const bootstrapCmd = findExecSyncCall("new-session");
+    expect(bootstrapCmd).toContain('tmux new-session -d -s "feat-login" -c "/workspace"');
+    expect(bootstrapCmd).toContain('tmux split-window -h -t "feat-login":0 -c "/workspace"');
+    expect(bootstrapCmd).toContain('tmux send-keys -t "feat-login":0.0 "pnpm dev" Enter');
+    expect(bootstrapCmd).toContain('tmux send-keys -t "feat-login":0.1 "pnpm test" Enter');
   });
 
   it("should skip session creation when tmux session already exists", async () => {
@@ -124,7 +189,13 @@ describe("attachLocalSession — tmux 세션 자동 생성", () => {
     expect(nodePty.spawn).toHaveBeenCalledWith(
       "tmux",
       ["attach-session", "-t", "feat-login"],
-      expect.any(Object),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PATH: process.platform === "darwin"
+            ? expect.stringContaining("/opt/homebrew/bin")
+            : expect.any(String),
+        }),
+      }),
     );
   });
 
@@ -143,13 +214,13 @@ describe("attachLocalSession — tmux 세션 자동 생성", () => {
     });
 
     // When
-    await attachLocalSession(
+    await expect(attachLocalSession(
       "task-4",
       SessionType.TMUX,
       "feat-login",
       ws,
       "/workspace",
-    );
+    )).rejects.toThrow("tmux 세션 생성에 실패했습니다.");
 
     // Then
     expect(ws.close).toHaveBeenCalledWith(1008, "tmux 세션 생성에 실패했습니다.");
@@ -290,6 +361,267 @@ describe("attachLocalSession — zellij 세션 생성 및 레이아웃 적용", 
       "zellij",
       ["--session", "feat-login"],
       expect.any(Object),
+    );
+  });
+});
+
+describe("focusSession — 렌더러 포커스 처리", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  it("상세 탭 포커스가 tmux 클라이언트를 전환하지 않는다", async () => {
+    // Given
+    const { attachLocalSession, focusSession } = await import("@/lib/terminal");
+    mockExecSync.mockReturnValue("");
+
+    await attachLocalSession(
+      "task-focus",
+      SessionType.TMUX,
+      "feat-login",
+      createMockWs(),
+      "/workspace",
+    );
+    mockExecSync.mockClear();
+
+    // When
+    focusSession("task-focus");
+
+    // Then
+    expect(findExecSyncCall("switch-client")).toBeUndefined();
+  });
+});
+
+describe("attachRemoteSession — ssh 바이너리 기반 연결", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  it("should spawn ssh with tty options for remote tmux attach", async () => {
+    // Given
+    const originalDisplay = process.env.DISPLAY;
+    delete process.env.DISPLAY;
+    const { attachRemoteSession } = await import("@/lib/terminal");
+    const nodePty = await import("node-pty");
+
+    try {
+      // When
+      await attachRemoteSession(
+        "task-r1",
+        "remote-host",
+        SessionType.TMUX,
+        "remote-session",
+        createMockWs(),
+        {
+          host: "remote-host",
+          hostname: "example.com",
+          port: 2202,
+          username: "tester",
+          privateKeyPath: "/tmp/test-key",
+        },
+        120,
+        30,
+        "/remote/worktree",
+      );
+
+      // Then
+      expect(nodePty.spawn).toHaveBeenCalledWith(
+        "ssh",
+        expect.any(Array),
+        expect.objectContaining({ cwd: expect.any(String) }),
+      );
+      const sshArgs = vi.mocked(nodePty.spawn).mock.calls[0][1] as string[];
+      expect(sshArgs).toEqual([
+        "-i",
+        "/tmp/test-key",
+        "-p",
+        "2202",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-tt",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=2",
+        "remote-host",
+      ]);
+      expect(sshArgs).not.toContain("-Y");
+      expect(sshArgs).not.toContain("ControlMaster=auto");
+      expect(mockPtyWrite).toHaveBeenCalledWith(
+        expect.stringContaining('tmux has-session -t "remote-session"'),
+      );
+      expect(mockPtyWrite).toHaveBeenCalledWith(
+        expect.stringContaining('tmux new-session -d -s "remote-session" -c "/remote/worktree"'),
+      );
+    } finally {
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+    }
+  });
+
+  it("should build a POSIX-sh-valid remote tmux attach command", async () => {
+    // Given
+    const originalDisplay = process.env.DISPLAY;
+    delete process.env.DISPLAY;
+    const { attachRemoteSession } = await import("@/lib/terminal");
+
+    try {
+      // When
+      await attachRemoteSession(
+        "task-r-shell",
+        "remote-host",
+        SessionType.TMUX,
+        "remote-session",
+        createMockWs(),
+        {
+          host: "remote-host",
+          hostname: "example.com",
+          port: 2202,
+          username: "tester",
+          privateKeyPath: "/tmp/test-key",
+        },
+        120,
+        30,
+        "/remote/worktree",
+      );
+
+      // Then
+      const attachCommand = String(mockPtyWrite.mock.calls[0]?.[0] ?? "").trim();
+      expectValidPosixShellSyntax(attachCommand);
+    } finally {
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+    }
+  });
+
+  it("should start remote tmux through an interactive SSH shell", async () => {
+    // Given
+    const originalDisplay = process.env.DISPLAY;
+    delete process.env.DISPLAY;
+    const { attachRemoteSession } = await import("@/lib/terminal");
+    const nodePty = await import("node-pty");
+
+    try {
+      // When
+      await attachRemoteSession(
+        "task-r-interactive",
+        "remote-host",
+        SessionType.TMUX,
+        "remote-session",
+        createMockWs(),
+        {
+          host: "remote-host",
+          hostname: "example.com",
+          port: 2202,
+          username: "tester",
+          privateKeyPath: "/tmp/test-key",
+        },
+        120,
+        30,
+        "/remote/worktree",
+      );
+
+      // Then
+      const sshArgs = vi.mocked(nodePty.spawn).mock.calls[0][1] as string[];
+      expect(sshArgs.at(-1)).toBe("remote-host");
+      expect(sshArgs).not.toContain(expect.stringContaining("sh -lc "));
+      expect(mockPtyWrite).toHaveBeenCalledWith(
+        expect.stringContaining('tmux has-session -t "remote-session"'),
+      );
+    } finally {
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+    }
+  });
+
+  it("should request trusted X11 forwarding only when a local DISPLAY exists", async () => {
+    // Given
+    const originalDisplay = process.env.DISPLAY;
+    process.env.DISPLAY = ":0";
+    const { attachRemoteSession } = await import("@/lib/terminal");
+    const nodePty = await import("node-pty");
+
+    try {
+      // When
+      await attachRemoteSession(
+        "task-r-x11",
+        "remote-host",
+        SessionType.TMUX,
+        "remote-session",
+        createMockWs(),
+        {
+          host: "remote-host",
+          hostname: "example.com",
+          port: 2202,
+          username: "tester",
+          privateKeyPath: "/tmp/test-key",
+        },
+      );
+
+      // Then
+      const sshArgs = vi.mocked(nodePty.spawn).mock.calls[0][1] as string[];
+      expect(sshArgs).toContain("-Y");
+      expect(sshArgs.indexOf("-Y")).toBeLessThan(sshArgs.indexOf("remote-host"));
+    } finally {
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+    }
+  });
+
+  it("should apply tmux pane layout commands when creating a remote session", async () => {
+    const { attachRemoteSession } = await import("@/lib/terminal");
+
+    await attachRemoteSession(
+      "task-r2",
+      "remote-host",
+      SessionType.TMUX,
+      "remote-session",
+      createMockWs(),
+      {
+        host: "remote-host",
+        hostname: "example.com",
+        port: 2202,
+        username: "tester",
+        privateKeyPath: "/tmp/test-key",
+      },
+      120,
+      30,
+      "/remote/worktree",
+      {
+        layoutType: PaneLayoutType.VERTICAL_2,
+        panes: [
+          { position: 0, command: "pnpm dev" },
+          { position: 1, command: "pnpm test" },
+        ],
+      },
+    );
+
+    expect(mockPtyWrite).toHaveBeenCalledWith(
+      expect.stringContaining('tmux split-window -h -t "remote-session":0 -c "/remote/worktree"'),
+    );
+    expect(mockPtyWrite).toHaveBeenCalledWith(
+      expect.stringContaining('tmux send-keys -t "remote-session":0.0 "pnpm dev" Enter'),
+    );
+    expect(mockPtyWrite).toHaveBeenCalledWith(
+      expect.stringContaining('tmux send-keys -t "remote-session":0.1 "pnpm test" Enter'),
     );
   });
 });

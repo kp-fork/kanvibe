@@ -22,7 +22,7 @@ vi.mock("next-intl", () => ({
   },
 }));
 
-vi.mock("@/i18n/navigation", () => ({
+vi.mock("@/desktop/renderer/navigation", () => ({
   Link: ({ children, href, title, ...props }: Record<string, unknown>) => (
     <a href={href as string} title={title as string} {...props}>{children as React.ReactNode}</a>
   ),
@@ -192,5 +192,24 @@ describe("TaskDetailInfoCard - Project Badge Color", () => {
     // Then
     const shortcutLink = screen.getByTestId("shortcut-link");
     expect(shortcutLink.className).toContain("bg-tag-project-bg");
+  });
+});
+
+describe("TaskDetailInfoCard - PR Link", () => {
+  it("should not render PR link in the task information drawer", () => {
+    const task = createTask({
+      prUrl: "https://github.com/kanvibe/kanvibe/pull/236",
+    });
+
+    render(
+      <TaskDetailInfoCard
+        task={task}
+        agentTagStyle={null}
+        baseBranchTaskId={null}
+      />
+    );
+
+    expect(screen.queryByText("PR 링크")).toBeNull();
+    expect(screen.queryByText("PR")).toBeNull();
   });
 });

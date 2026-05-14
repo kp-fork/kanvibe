@@ -8,7 +8,7 @@ import type { KanbanTask } from "@/entities/KanbanTask";
 const mockRefresh = vi.fn();
 const mockUpdateTask = vi.fn().mockResolvedValue({});
 
-vi.mock("@/i18n/navigation", () => ({
+vi.mock("@/desktop/renderer/navigation", () => ({
   useRouter: () => ({
     refresh: mockRefresh,
     push: vi.fn(),
@@ -34,7 +34,7 @@ vi.mock("next-intl", () => ({
   },
 }));
 
-vi.mock("@/app/actions/kanban", () => ({
+vi.mock("@/desktop/renderer/actions/kanban", () => ({
   updateTask: (...args: unknown[]) => mockUpdateTask(...args),
 }));
 
@@ -239,6 +239,25 @@ describe("TaskDetailTitleCard - Description Editing", () => {
 
     // Then
     expect(mockUpdateTask).toHaveBeenCalledWith("task-1", { description: "컨트롤 저장" });
+  });
+
+  it("should call updateTask via Enter key", async () => {
+    // Given
+    const user = userEvent.setup();
+    const task = createTask({ description: "기존 설명" });
+    render(<TaskDetailTitleCard task={task} taskId="task-1" />);
+    fireEvent.click(screen.getByText("기존 설명"));
+
+    // When
+    const textarea = screen.getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "엔터 저장");
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter" });
+    });
+
+    // Then
+    expect(mockUpdateTask).toHaveBeenCalledWith("task-1", { description: "엔터 저장" });
   });
 
   it("should not call updateTask when description is unchanged", async () => {

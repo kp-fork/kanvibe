@@ -13,7 +13,7 @@ vi.mock("@/lib/gitOperations", () => ({
 
 const mockGetEffectivePaneLayout = vi.fn();
 
-vi.mock("@/app/actions/paneLayout", () => ({
+vi.mock("@/desktop/main/services/paneLayoutService", () => ({
   getEffectivePaneLayout: (...args: unknown[]) =>
     mockGetEffectivePaneLayout(...args),
 }));
@@ -206,12 +206,12 @@ describe("removeSessionOnly", () => {
 
     // Then
     expect(mockExecGit).toHaveBeenCalledWith(
-      'tmux kill-session -t "feat-branch"',
+      "tmux kill-session -t 'feat-branch' 2>/dev/null || true",
       undefined,
     );
   });
 
-  it("should kill zellij session with fallback to delete", async () => {
+  it("should kill zellij session and delete resurrectable session data", async () => {
     // Given
     mockExecGit.mockResolvedValue("");
     const { removeSessionOnly } = await import("@/lib/worktree");
@@ -221,9 +221,60 @@ describe("removeSessionOnly", () => {
 
     // Then
     expect(mockExecGit).toHaveBeenCalledWith(
-      'zellij kill-session "feat-branch" 2>/dev/null || zellij delete-session "feat-branch" 2>/dev/null',
+      "zellij kill-sessions 'feat-branch' 2>/dev/null || true; zellij delete-session 'feat-branch' 2>/dev/null || true",
       undefined,
     );
+  });
+
+  it("should pass sshHost when cleaning remote zellij session", async () => {
+    // Given
+    mockExecGit.mockResolvedValue("");
+    const { removeSessionOnly } = await import("@/lib/worktree");
+
+    // When
+    await removeSessionOnly(SessionType.ZELLIJ, "feat-branch", "remote-host");
+
+    // Then
+    expect(mockExecGit).toHaveBeenCalledWith(
+      "zellij kill-sessions 'feat-branch' 2>/dev/null || true; zellij delete-session 'feat-branch' 2>/dev/null || true",
+      "remote-host",
+    );
+  });
+
+  it("should verify zellij cleanup when cleanup errors must be surfaced", async () => {
+    // Given
+    mockExecGit.mockResolvedValue("");
+    const { removeSessionOnly } = await import("@/lib/worktree");
+
+    // When
+    await removeSessionOnly(SessionType.ZELLIJ, "feat-branch", "remote-host", { throwOnError: true });
+
+    // Then
+    const command = mockExecGit.mock.calls[0][0] as string;
+    expect(command).toContain("command -v zellij >/dev/null 2>&1");
+    expect(command).toContain("zellij kill-sessions 'feat-branch'");
+    expect(command).toContain("zellij delete-session 'feat-branch'");
+    expect(command).toContain("zellij list-sessions");
+    expect(command).toContain("grep -Fx -- 'feat-branch'");
+    expect(mockExecGit).toHaveBeenCalledWith(command, "remote-host");
+  });
+
+  it("should verify tmux cleanup by exact session name when cleanup errors must be surfaced", async () => {
+    // Given
+    mockExecGit.mockResolvedValue("");
+    const { removeSessionOnly } = await import("@/lib/worktree");
+
+    // When
+    await removeSessionOnly(SessionType.TMUX, "feat-branch", "remote-host", { throwOnError: true });
+
+    // Then
+    const command = mockExecGit.mock.calls[0][0] as string;
+    expect(command).toContain("command -v tmux >/dev/null 2>&1");
+    expect(command).toContain("tmux kill-session -t 'feat-branch'");
+    expect(command).toContain("tmux list-sessions -F '#{session_name}'");
+    expect(command).toContain("grep -Fx -- 'feat-branch'");
+    expect(command).not.toContain("tmux has-session");
+    expect(mockExecGit).toHaveBeenCalledWith(command, "remote-host");
   });
 
   it("should not throw when session is already terminated", async () => {
@@ -243,7 +294,7 @@ describe("createSessionWithoutWorktree", () => {
 
   it("should return session name derived from branch name", async () => {
     // Given
-    mockExecGit.mockRejectedValueOnce(new Error("no session")).mockResolvedValue("");
+    mockExecGit.mockResolvedValue("");
     const { createSessionWithoutWorktree } = await import("@/lib/worktree");
 
     // When
@@ -257,13 +308,13 @@ describe("createSessionWithoutWorktree", () => {
     expect(result.sessionName).toBe("path-feat-my-feature");
   });
 
-  it("should create tmux session with working directory when session does not exist", async () => {
+  it("should defer local tmux session creation until terminal attach", async () => {
     // Given
-    mockExecGit.mockRejectedValueOnce(new Error("no session")).mockResolvedValue("");
+    mockExecGit.mockResolvedValue("");
     const { createSessionWithoutWorktree } = await import("@/lib/worktree");
 
     // When
-    await createSessionWithoutWorktree(
+    const result = await createSessionWithoutWorktree(
       "/repo/path",
       "feat/test",
       SessionType.TMUX,
@@ -272,13 +323,12 @@ describe("createSessionWithoutWorktree", () => {
     );
 
     // Then
-    expect(mockExecGit).toHaveBeenCalledWith(
-      'tmux new-session -d -s "path-feat-test" -c "/custom/dir"',
-      null,
-    );
+    expect(result.sessionName).toBe("path-feat-test");
+    expect(filterCalls("tmux has-session")).toHaveLength(0);
+    expect(filterCalls("tmux new-session")).toHaveLength(0);
   });
 
-  it("should skip session creation when tmux session already exists", async () => {
+  it("should not probe local tmux session existence before terminal attach", async () => {
     // Given
     mockExecGit.mockResolvedValue("");
     const { createSessionWithoutWorktree } = await import("@/lib/worktree");
@@ -291,12 +341,35 @@ describe("createSessionWithoutWorktree", () => {
     );
 
     // Then
-    /** isSessionAlive → has-session 호출 1회만 발생, new-session은 호출되지 않는다 */
-    expect(mockExecGit).toHaveBeenCalledTimes(1);
-    expect(mockExecGit).toHaveBeenCalledWith(
-      'tmux has-session -t "path-main" 2>/dev/null',
-      undefined,
+    expect(filterCalls("tmux has-session")).toHaveLength(0);
+    expect(filterCalls("tmux new-session")).toHaveLength(0);
+  });
+
+  it("should defer remote tmux dependency checks and creation until terminal attach", async () => {
+    // Given
+    mockExecGit.mockImplementation((command: string, sshHost?: string | null) => {
+      if (command === "command -v tmux >/dev/null 2>&1" && sshHost === "remote-host") {
+        return Promise.resolve("");
+      }
+
+      return Promise.resolve("");
+    });
+
+    const { createSessionWithoutWorktree } = await import("@/lib/worktree");
+
+    // When
+    await createSessionWithoutWorktree(
+      "/repo/path",
+      "main",
+      SessionType.TMUX,
+      "remote-host",
+      "/custom/dir",
     );
+
+    // Then
+    expect(filterCalls("command -v tmux")).toHaveLength(0);
+    expect(filterCalls("tmux has-session")).toHaveLength(0);
+    expect(filterCalls("tmux new-session")).toHaveLength(0);
   });
 });
 
@@ -494,6 +567,49 @@ describe("generateZellijLayoutKdl", () => {
 describe("createWorktreeWithSession — Zellij KDL layout file persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("should defer remote tmux dependency checks until terminal attach", async () => {
+    // Given
+    mockExecGit.mockResolvedValue("");
+    const { createWorktreeWithSession } = await import("@/lib/worktree");
+
+    // When
+    await createWorktreeWithSession(
+      "/home/user/kanvibe",
+      "feat-new",
+      "main",
+      SessionType.TMUX,
+      "remote-create-host",
+      "project-1",
+    );
+
+    // Then
+    expect(filterCalls("command -v tmux")).toHaveLength(0);
+    expect(filterCalls("tmux has-session")).toHaveLength(0);
+    expect(filterCalls("tmux new-session")).toHaveLength(0);
+    expect(filterCalls("git -C")).toHaveLength(1);
+  });
+
+  it("should defer local tmux session creation until terminal attach", async () => {
+    // Given
+    mockExecGit.mockResolvedValue("");
+    const { createWorktreeWithSession } = await import("@/lib/worktree");
+
+    // When
+    await createWorktreeWithSession(
+      "/home/user/kanvibe",
+      "feat-local",
+      "main",
+      SessionType.TMUX,
+      null,
+      "project-1",
+    );
+
+    // Then
+    expect(filterCalls("tmux has-session")).toHaveLength(0);
+    expect(filterCalls("tmux new-session")).toHaveLength(0);
+    expect(filterCalls("git -C")).toHaveLength(1);
   });
 
   it("should write layout file to worktree directory without starting zellij", async () => {

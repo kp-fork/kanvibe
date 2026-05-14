@@ -1,34 +1,41 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, useTransition } from "react";
 import { useTranslations } from "next-intl";
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
+import BoardPageFindBar from "./BoardPageFindBar";
 import Column from "./Column";
 import CreateTaskModal from "./CreateTaskModal";
+import NotificationCenterButton from "./NotificationCenterButton";
 import ProjectSelector from "./ProjectSelector";
-import ProjectSettings from "./ProjectSettings";
 import TaskContextMenu from "./TaskContextMenu";
 import BranchTaskModal from "./BranchTaskModal";
 import DoneConfirmDialog from "./DoneConfirmDialog";
-import { reorderTasks, deleteTask, getMoreDoneTasks, moveTaskToColumn } from "@/app/actions/kanban";
-import type { TasksByStatus } from "@/app/actions/kanban";
+import { reorderTasks, deleteTask, getMoreDoneTasks, moveTaskToColumn } from "@/desktop/renderer/actions/kanban";
+import type { TasksByStatus } from "@/desktop/renderer/actions/kanban";
+import { useBoardCommands } from "@/desktop/renderer/components/BoardCommandProvider";
+import { navigateToTaskDetail } from "@/desktop/renderer/utils/taskNavigation";
 import { SessionType, TaskStatus, type KanbanTask } from "@/entities/KanbanTask";
 import type { Project } from "@/entities/Project";
-import { logoutAction } from "@/app/actions/auth";
-import { useAutoRefresh } from "@/hooks/useAutoRefresh";
-import { useProjectFilterParams } from "@/hooks/useProjectFilterParams";
+import { useAutoRefresh } from "@/desktop/renderer/hooks/useAutoRefresh";
+import { useProjectFilterParams } from "@/desktop/renderer/hooks/useProjectFilterParams";
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "@/desktop/renderer/utils/locales";
 import { computeProjectColor } from "@/lib/projectColor";
+import type { NotificationCenterButtonHandle } from "./NotificationCenterButton";
+import type { ProjectSelectorHandle } from "./ProjectSelector";
 
 interface BoardProps {
   initialTasks: TasksByStatus;
   initialDoneTotal: number;
   initialDoneLimit: number;
+  initialFocusTaskId?: string | null;
   sshHosts: string[];
   projects: Project[];
   sidebarDefaultCollapsed: boolean;
   doneAlertDismissed: boolean;
   notificationSettings: { isEnabled: boolean; enabledStatuses: string[] };
   defaultSessionType: SessionType;
+  taskSearchShortcut: string;
 }
 
 const COLUMNS: { status: TaskStatus; labelKey: string; colorClass: string }[] = [
@@ -39,6 +46,9 @@ const COLUMNS: { status: TaskStatus; labelKey: string; colorClass: string }[] = 
   { status: TaskStatus.DONE, labelKey: "done", colorClass: "bg-status-done" },
 ];
 
+const TASK_CARD_SELECTOR = "[data-kanban-task-card='true']";
+const BOARD_TASK_FOCUS_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+
 interface ContextMenuState {
   isOpen: boolean;
   x: number;
@@ -46,11 +56,126 @@ interface ContextMenuState {
   task: KanbanTask | null;
 }
 
+function getBoardTaskCards() {
+  return Array.from(document.querySelectorAll<HTMLAnchorElement>(TASK_CARD_SELECTOR));
+}
+
+function focusBoardTaskCard(card: HTMLAnchorElement) {
+  card.focus({ preventScroll: true });
+  card.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+}
+
+function findBoardTaskCardById(taskId: string) {
+  return getBoardTaskCards().find((card) => card.dataset.kanbanTaskId === taskId) ?? null;
+}
+
+function findTaskById(tasks: TasksByStatus, taskId: string) {
+  for (const status of Object.values(TaskStatus)) {
+    const task = tasks[status].find((candidate) => candidate.id === taskId);
+    if (task) return task;
+  }
+
+  return null;
+}
+
+function shouldIgnoreBoardTaskFocusEvent(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+    return true;
+  }
+
+  const target = event.target instanceof Element
+    ? event.target
+    : document.activeElement instanceof Element
+      ? document.activeElement
+      : null;
+
+  if (!target) return false;
+
+  return Boolean(
+    target.closest(
+      [
+            TASK_CARD_SELECTOR,
+            "a[href]",
+            "[role='link']",
+            "input",
+            "textarea",
+            "select",
+        "button",
+        "[contenteditable='true']",
+        "[data-terminal-focus-blocker='true']",
+        "[role='menu']",
+        "[role='menuitem']",
+        "[role='dialog']",
+      ].join(","),
+    ),
+  );
+}
+
+function getTaskCardFromKeyboardEvent(event: KeyboardEvent) {
+  const target = event.target instanceof Element
+    ? event.target
+    : document.activeElement instanceof Element
+      ? document.activeElement
+      : null;
+
+  return target?.closest<HTMLAnchorElement>(TASK_CARD_SELECTOR) ?? null;
+}
+
+function isShiftOnlyKeyboardShortcut(event: KeyboardEvent, key: string) {
+  return event.key === key && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+}
+
+function getCurrentBoardLocale() {
+  const firstSegment = window.location.hash.replace(/^#/, "").split("/").filter(Boolean)[0];
+  return SUPPORTED_LOCALES.includes(firstSegment as typeof SUPPORTED_LOCALES[number])
+    ? firstSegment
+    : DEFAULT_LOCALE;
+}
+
+function openTaskDetailInNewWindow(taskId: string) {
+  void navigateToTaskDetail(taskId, {
+    currentLocale: getCurrentBoardLocale(),
+    openInNewWindow: true,
+  });
+}
+
+function buildStatusMoveResult(
+  task: KanbanTask,
+  destinationStatus: TaskStatus,
+  currentTasks: TasksByStatus,
+  filteredTasks: TasksByStatus,
+): DropResult | null {
+  if (task.status === destinationStatus) return null;
+
+  const sourceIndex = currentTasks[task.status].findIndex((candidate) => candidate.id === task.id);
+  if (sourceIndex === -1) return null;
+
+  return {
+    draggableId: task.id,
+    type: "DEFAULT",
+    source: {
+      droppableId: task.status,
+      index: sourceIndex,
+    },
+    destination: {
+      droppableId: destinationStatus,
+      index: filteredTasks[destinationStatus].length,
+    },
+    reason: "DROP",
+    mode: "FLUID",
+    combine: null,
+  };
+}
+
 /** worktree repoPath에서 메인 프로젝트 경로를 추출한다 */
 function extractMainRepoPath(repoPath: string): string | null {
   const worktreeIndex = repoPath.indexOf("__worktrees");
   if (worktreeIndex === -1) return null;
   return repoPath.slice(0, worktreeIndex);
+}
+
+function openSettingsPage() {
+  window.location.hash = `#/${getCurrentBoardLocale()}/settings`;
 }
 
 /**
@@ -88,14 +213,112 @@ function insertAtFilteredIndex(
   return arr;
 }
 
-export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit, sshHosts, projects, sidebarDefaultCollapsed, doneAlertDismissed, notificationSettings, defaultSessionType }: BoardProps) {
+interface DragMovePlan {
+  updatedTasks: TasksByStatus;
+  doneTotalDelta: number;
+  doneOffsetDelta: number;
+  persistence:
+    | { type: "reorder"; status: TaskStatus; orderedIds: string[] }
+    | { type: "move"; taskId: string; status: TaskStatus; orderedIds: string[] };
+}
+
+function buildDragMovePlan(
+  currentTasks: TasksByStatus,
+  result: DropResult,
+  projectFilterSet: Set<string> | null,
+): DragMovePlan | null {
+  const { source, destination, draggableId } = result;
+  if (!destination) return null;
+
+  const sourceStatus = source.droppableId as TaskStatus;
+  const destStatus = destination.droppableId as TaskStatus;
+  const updated: TasksByStatus = { ...currentTasks };
+
+  const taskIndex = updated[sourceStatus].findIndex((task) => task.id === draggableId);
+  if (taskIndex === -1) return null;
+
+  const movedTask = updated[sourceStatus][taskIndex];
+  const newSource = updated[sourceStatus].filter((task) => task.id !== draggableId);
+
+  if (sourceStatus === destStatus) {
+    updated[sourceStatus] = insertAtFilteredIndex(
+      newSource,
+      movedTask,
+      destination.index,
+      projectFilterSet,
+    );
+
+    const orderedIds = (
+      projectFilterSet
+        ? updated[sourceStatus].filter(
+            (task) => task.projectId && projectFilterSet.has(task.projectId),
+          )
+        : updated[sourceStatus]
+    ).map((task) => task.id);
+
+    return {
+      updatedTasks: updated,
+      doneTotalDelta: 0,
+      doneOffsetDelta: 0,
+      persistence: {
+        type: "reorder",
+        status: sourceStatus,
+        orderedIds,
+      },
+    };
+  }
+
+  updated[sourceStatus] = newSource;
+  const updatedTask: KanbanTask = { ...movedTask, status: destStatus };
+  updated[destStatus] = insertAtFilteredIndex(
+    updated[destStatus],
+    updatedTask,
+    destination.index,
+    projectFilterSet,
+  );
+
+  const orderedIds = (
+    projectFilterSet
+      ? updated[destStatus].filter(
+          (task) => task.projectId && projectFilterSet.has(task.projectId),
+        )
+      : updated[destStatus]
+  ).map((task) => task.id);
+
+  return {
+    updatedTasks: updated,
+    doneTotalDelta:
+      (destStatus === TaskStatus.DONE ? 1 : 0) -
+      (sourceStatus === TaskStatus.DONE ? 1 : 0),
+    doneOffsetDelta:
+      (destStatus === TaskStatus.DONE ? 1 : 0) -
+      (sourceStatus === TaskStatus.DONE ? 1 : 0),
+    persistence: {
+      type: "move",
+      taskId: draggableId,
+      status: destStatus,
+      orderedIds,
+    },
+  };
+}
+
+export default function Board({
+  initialTasks,
+  initialDoneTotal,
+  initialDoneLimit,
+  initialFocusTaskId,
+  sshHosts,
+  projects,
+  doneAlertDismissed,
+  defaultSessionType,
+}: BoardProps) {
   useAutoRefresh();
+  const boardCommands = useBoardCommands();
   const t = useTranslations("board");
   const tt = useTranslations("task");
   const tc = useTranslations("common");
   const [tasks, setTasks] = useState<TasksByStatus>(initialTasks);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
   const [branchTodoDefaults, setBranchTodoDefaults] = useState<{
     baseBranch: string;
@@ -111,6 +334,11 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
   const [isDoneAlertDismissed, setIsDoneAlertDismissed] = useState(doneAlertDismissed);
   const [pendingDoneResult, setPendingDoneResult] = useState<DropResult | null>(null);
   const [currentDefaultSessionType, setCurrentDefaultSessionType] = useState<SessionType>(defaultSessionType);
+  const [shouldUseMacTitlebarLayout, setShouldUseMacTitlebarLayout] = useState(false);
+  const [, startDragPersistenceTransition] = useTransition();
+  const notificationCenterRef = useRef<NotificationCenterButtonHandle>(null);
+  const projectSelectorRef = useRef<ProjectSelectorHandle>(null);
+  const hasAppliedInitialFocusRef = useRef(false);
 
   /** projectId → 표시할 프로젝트 이름 매핑. worktree 프로젝트는 메인 프로젝트 이름으로 resolve한다 */
   const projectNameMap = useMemo(() => {
@@ -156,28 +384,6 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
     }
     return colorMap;
   }, [projectNameMap, projects]);
-
-  /** projectId → defaultBranch 매핑. worktree 프로젝트는 메인 프로젝트의 defaultBranch를 상속 */
-  const projectDefaultBranchMap = useMemo(() => {
-    const branchMap: Record<string, string> = {};
-    const pathToBranch: Record<string, string> = {};
-
-    for (const project of projects) {
-      const mainPath = extractMainRepoPath(project.repoPath);
-      if (!mainPath) {
-        pathToBranch[project.repoPath] = project.defaultBranch;
-      }
-    }
-
-    for (const project of projects) {
-      const mainPath = extractMainRepoPath(project.repoPath);
-      branchMap[project.id] = mainPath
-        ? (pathToBranch[mainPath] ?? project.defaultBranch)
-        : project.defaultBranch;
-    }
-
-    return branchMap;
-  }, [projects]);
 
   /** 필터 드롭다운에 표시할 메인 프로젝트 목록 (worktree 제외) */
   const filterableProjects = useMemo(
@@ -249,6 +455,94 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
     setCurrentDefaultSessionType(defaultSessionType);
   }, [defaultSessionType]);
 
+  useEffect(() => {
+    const isDesktopApp = window.kanvibeDesktop?.isDesktop === true;
+    const isMacDesktop = navigator.userAgent.includes("Mac") || navigator.platform.toLowerCase().includes("mac");
+    setShouldUseMacTitlebarLayout(isDesktopApp && isMacDesktop);
+  }, []);
+
+  useEffect(() => {
+    hasAppliedInitialFocusRef.current = false;
+  }, [initialFocusTaskId]);
+
+  useEffect(() => {
+    if (!isMounted || !initialFocusTaskId || hasAppliedInitialFocusRef.current) {
+      return;
+    }
+
+    if (!findTaskById(filteredTasks, initialFocusTaskId)) {
+      return;
+    }
+
+    const targetTaskCard = findBoardTaskCardById(initialFocusTaskId);
+    if (!targetTaskCard) {
+      return;
+    }
+
+    focusBoardTaskCard(targetTaskCard);
+    hasAppliedInitialFocusRef.current = true;
+  }, [filteredTasks, initialFocusTaskId, isMounted]);
+
+  useEffect(() => boardCommands.registerBoardHandlers({
+    toggleNotificationCenter() {
+      notificationCenterRef.current?.toggle();
+    },
+    openProjectFilter() {
+      projectSelectorRef.current?.open();
+    },
+    openCreateTaskModal(defaults) {
+      setBranchTodoDefaults(defaults ?? null);
+      setIsModalOpen(true);
+    },
+  }), [boardCommands]);
+
+  useEffect(() => {
+    function handleWindowTaskFocus(event: KeyboardEvent) {
+      if (!BOARD_TASK_FOCUS_KEYS.has(event.key)) return;
+      if (contextMenu.isOpen || isModalOpen || isBranchModalOpen || pendingDoneResult) return;
+      if (shouldIgnoreBoardTaskFocusEvent(event)) return;
+
+      const firstTaskCard = getBoardTaskCards()[0];
+      if (!firstTaskCard) return;
+
+      event.preventDefault();
+      focusBoardTaskCard(firstTaskCard);
+    }
+
+    window.addEventListener("keydown", handleWindowTaskFocus);
+    return () => window.removeEventListener("keydown", handleWindowTaskFocus);
+  }, [contextMenu.isOpen, isBranchModalOpen, isModalOpen, pendingDoneResult]);
+
+  useEffect(() => {
+    function handleWindowTaskShortcut(event: KeyboardEvent) {
+      const shouldOpenTaskInNewWindow = isShiftOnlyKeyboardShortcut(event, "Enter");
+      const shouldOpenTaskContextMenu = isShiftOnlyKeyboardShortcut(event, "F10");
+      if (!shouldOpenTaskInNewWindow && !shouldOpenTaskContextMenu) return;
+      if (contextMenu.isOpen || isModalOpen || isBranchModalOpen || pendingDoneResult) return;
+
+      const taskCard = getTaskCardFromKeyboardEvent(event);
+      const taskId = taskCard?.dataset.kanbanTaskId;
+      if (!taskCard || !taskId) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (shouldOpenTaskInNewWindow) {
+        openTaskDetailInNewWindow(taskId);
+        return;
+      }
+
+      const task = findTaskById(filteredTasks, taskId);
+      if (!task) return;
+
+      const rect = taskCard.getBoundingClientRect();
+      setContextMenu({ isOpen: true, x: rect.left + 12, y: rect.top + 12, task });
+    }
+
+    window.addEventListener("keydown", handleWindowTaskShortcut, true);
+    return () => window.removeEventListener("keydown", handleWindowTaskShortcut, true);
+  }, [contextMenu.isOpen, filteredTasks, isBranchModalOpen, isModalOpen, pendingDoneResult]);
+
   const handleLoadMoreDone = useCallback(async () => {
     if (isLoadingMore) return;
     setIsLoadingMore(true);
@@ -268,79 +562,33 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
   /** 드래그 결과를 받아 state 업데이트 + DB 반영을 수행한다 */
   const executeDragMove = useCallback(
     (result: DropResult) => {
-      const { source, destination, draggableId } = result;
-      if (!destination) return;
+      const plan = buildDragMovePlan(tasks, result, projectFilterSet);
+      if (!plan) return;
 
-      const sourceStatus = source.droppableId as TaskStatus;
-      const destStatus = destination.droppableId as TaskStatus;
+      setTasks(plan.updatedTasks);
 
-      setTasks((prev) => {
-        const updated = { ...prev };
+      if (plan.doneTotalDelta !== 0) {
+        setDoneTotal((prev) => prev + plan.doneTotalDelta);
+      }
 
-        const taskIndex = updated[sourceStatus].findIndex(
-          (task) => task.id === draggableId
-        );
-        if (taskIndex === -1) return prev;
+      if (plan.doneOffsetDelta !== 0) {
+        setDoneOffset((prev) => prev + plan.doneOffsetDelta);
+      }
 
-        const movedTask = updated[sourceStatus][taskIndex];
-        const newSource = updated[sourceStatus].filter(
-          (task) => task.id !== draggableId
-        );
-
-        if (sourceStatus === destStatus) {
-          updated[sourceStatus] = insertAtFilteredIndex(
-            newSource,
-            movedTask,
-            destination.index,
-            projectFilterSet
-          );
-
-          const reorderIds = (
-            projectFilterSet
-              ? updated[sourceStatus].filter(
-                  (task) =>
-                    task.projectId && projectFilterSet.has(task.projectId)
-                )
-              : updated[sourceStatus]
-          ).map((task) => task.id);
-
-          reorderTasks(sourceStatus, reorderIds);
-        } else {
-          updated[sourceStatus] = newSource;
-          const updatedTask: KanbanTask = { ...movedTask, status: destStatus };
-          updated[destStatus] = insertAtFilteredIndex(
-            updated[destStatus],
-            updatedTask,
-            destination.index,
-            projectFilterSet
-          );
-
-          if (destStatus === TaskStatus.DONE) {
-            setDoneTotal((prev) => prev + 1);
-            setDoneOffset((prev) => prev + 1);
-          }
-          if (sourceStatus === TaskStatus.DONE) {
-            setDoneTotal((prev) => prev - 1);
-            setDoneOffset((prev) => prev - 1);
-          }
-
-          /** 상태 변경 + 목적지 컬럼 순서를 한 번에 DB에 반영한다 (revalidation 없음) */
-          const destReorderIds = (
-            projectFilterSet
-              ? updated[destStatus].filter(
-                  (task) =>
-                    task.projectId && projectFilterSet.has(task.projectId)
-                )
-              : updated[destStatus]
-          ).map((task) => task.id);
-
-          moveTaskToColumn(draggableId, destStatus, destReorderIds);
+      startDragPersistenceTransition(async () => {
+        if (plan.persistence.type === "reorder") {
+          await reorderTasks(plan.persistence.status, plan.persistence.orderedIds);
+          return;
         }
 
-        return updated;
+        await moveTaskToColumn(
+          plan.persistence.taskId,
+          plan.persistence.status,
+          plan.persistence.orderedIds,
+        );
       });
     },
-    [projectFilterSet]
+    [projectFilterSet, startDragPersistenceTransition, tasks]
   );
 
   const handleDragEnd = useCallback(
@@ -379,9 +627,8 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
   }, []);
 
   const handleContextMenu = useCallback(
-    (e: React.MouseEvent, task: KanbanTask) => {
-      e.preventDefault();
-      setContextMenu({ isOpen: true, x: e.clientX, y: e.clientY, task });
+    (task: KanbanTask, position: { x: number; y: number }) => {
+      setContextMenu({ isOpen: true, x: position.x, y: position.y, task });
     },
     []
   );
@@ -414,16 +661,53 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
     handleCloseContextMenu();
   }, [contextMenu.task, handleCloseContextMenu, tt]);
 
+  const handleStatusChangeFromCard = useCallback(
+    (newStatus: TaskStatus) => {
+      const task = contextMenu.task;
+      if (!task) return;
+
+      const result = buildStatusMoveResult(task, newStatus, tasks, filteredTasks);
+      handleCloseContextMenu();
+
+      if (!result) return;
+
+      const shouldConfirmDoneMove =
+        newStatus === TaskStatus.DONE &&
+        task.status !== TaskStatus.DONE &&
+        !isDoneAlertDismissed &&
+        !!(task.branchName || task.sessionType);
+
+      if (shouldConfirmDoneMove) {
+        setPendingDoneResult(result);
+        return;
+      }
+
+      executeDragMove(result);
+    },
+    [
+      contextMenu.task,
+      executeDragMove,
+      filteredTasks,
+      handleCloseContextMenu,
+      isDoneAlertDismissed,
+      tasks,
+    ],
+  );
+
+  const headerClassName = shouldUseMacTitlebarLayout
+    ? "flex items-center justify-end bg-bg-page px-6 pb-3 pl-20 pr-6 pt-10 [-webkit-app-region:drag]"
+    : "flex items-center justify-end border-b border-border-default bg-bg-surface px-6 py-3";
+
+  const mainClassName = shouldUseMacTitlebarLayout ? "px-6 pb-6" : "p-6";
+
   return (
-    <div className="min-h-screen">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border-default bg-bg-surface">
-        <div className="flex items-center gap-2">
-          <img src="/kanvibe-logo.svg" alt="KanVibe" className="h-6 w-6" />
-          <h1 className="text-xl font-bold text-text-primary">{t("title")}</h1>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="min-h-screen bg-bg-page">
+      <BoardPageFindBar />
+      <header className={headerClassName}>
+        <div className="flex items-center gap-3 [-webkit-app-region:no-drag]">
           <div className="w-64">
             <ProjectSelector
+              ref={projectSelectorRef}
               multiple
               projects={filterableProjects}
               selectedProjectIds={selectedProjectIds}
@@ -440,30 +724,24 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
             {t("newTask")}
           </button>
           <button
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-surface transition-colors"
+            onClick={openSettingsPage}
+            className="p-1.5 rounded-md border border-transparent text-text-muted transition-colors hover:border-border-default hover:bg-bg-page hover:text-text-primary"
             title={tc("settings")}
+            aria-label={tc("settings")}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
               <circle cx="12" cy="12" r="3"/>
             </svg>
           </button>
-          <form action={logoutAction}>
-            <button
-              type="submit"
-              className="px-3 py-1.5 text-sm text-text-muted hover:text-text-primary transition-colors"
-            >
-              {tc("logout")}
-            </button>
-          </form>
+          <NotificationCenterButton ref={notificationCenterRef} buttonClassName="hover:bg-bg-page" />
         </div>
       </header>
 
-      <main className="p-6">
+      <main className={mainClassName}>
         {isMounted ? (
           <DragDropContext onDragEnd={handleDragEnd}>
-            <div className="flex gap-4 overflow-x-auto">
+            <div className="flex gap-3 overflow-x-auto pb-2">
               {COLUMNS.map((col) => (
                 <Column
                   key={col.status}
@@ -474,7 +752,6 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
                   onContextMenu={handleContextMenu}
                   projectNameMap={projectNameMap}
                   projectColorMap={projectColorMap}
-                  projectDefaultBranchMap={projectDefaultBranchMap}
                   {...(col.status === TaskStatus.DONE && {
                     totalCount: doneTotal,
                     hasMore: doneOffset < doneTotal,
@@ -515,19 +792,6 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
         defaultSessionType={currentDefaultSessionType}
       />
 
-      <ProjectSettings
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        projects={projects}
-        sshHosts={sshHosts}
-        sidebarDefaultCollapsed={sidebarDefaultCollapsed}
-        defaultSessionType={currentDefaultSessionType}
-        onDefaultSessionTypeChange={(sessionType) => {
-          setCurrentDefaultSessionType(sessionType);
-        }}
-        notificationSettings={notificationSettings}
-      />
-
       {contextMenu.isOpen && contextMenu.task && (
         <TaskContextMenu
           x={contextMenu.x}
@@ -535,8 +799,15 @@ export default function Board({ initialTasks, initialDoneTotal, initialDoneLimit
           onClose={handleCloseContextMenu}
           onBranch={handleBranchFromCard}
           onCreateBranchTodo={handleCreateBranchTodo}
+          onStatusChange={handleStatusChangeFromCard}
           onDelete={handleDeleteFromCard}
           hasBranch={!!contextMenu.task.branchName}
+          currentStatus={contextMenu.task.status}
+          statusOptions={COLUMNS.map((column) => ({
+            status: column.status,
+            label: t(`columns.${column.labelKey}`),
+            colorClass: column.colorClass,
+          }))}
         />
       )}
 

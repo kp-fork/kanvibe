@@ -1,0 +1,966 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+
+const fs = require("node:fs");
+const http = require("node:http");
+const Module = require("node:module");
+const os = require("node:os");
+const path = require("node:path");
+const process = require("node:process");
+const { pathToFileURL } = require("node:url");
+const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
+const { createDesktopDiagnostics, resolveDesktopLogPath, serializeErrorForLog } = require("./diagnostics");
+
+const DEFAULT_LOCALE = "ko";
+const RENDERER_DEV_URL = process.env.KANVIBE_RENDERER_URL || null;
+const SHOULD_USE_SOURCE_MODULES = Boolean(RENDERER_DEV_URL);
+const HOOK_SERVER_HOST = "0.0.0.0";
+const DEV_HOOK_SERVER_PORT = 19736;
+const PACKAGED_HOOK_SERVER_PORT = 9736;
+const HOOK_SERVER_PORT = SHOULD_USE_SOURCE_MODULES ? DEV_HOOK_SERVER_PORT : PACKAGED_HOOK_SERVER_PORT;
+const RENDERER_ABORT_RECOVERY_TIMEOUT_MS = 1000;
+const RENDERER_ABORT_RECOVERY_INTERVAL_MS = 50;
+const originalResolveFilename = Module._resolveFilename;
+
+const isHeadlessLinuxRuntime = !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+
+if (SHOULD_USE_SOURCE_MODULES) {
+  require("tsx/cjs");
+}
+
+if (process.platform === "linux") {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  if (process.env.CI || isHeadlessLinuxRuntime) {
+    app.commandLine.appendSwitch("no-sandbox");
+  }
+}
+
+app.commandLine.appendSwitch("log-level", "3");
+
+let mainWindow = null;
+let hookServer = null;
+let windowOpenHelpers = null;
+let keyboardShortcutHelpers = null;
+let stopBackgroundTaskSync = null;
+let pendingNotificationActivation = null;
+let diagnostics = null;
+let nextIpcRequestId = 1;
+const pendingDiagnosticEvents = [];
+
+function logDiagnostic(event, payload = {}) {
+  if (!diagnostics) {
+    pendingDiagnosticEvents.push({ event, payload });
+    return;
+  }
+
+  diagnostics.log(event, payload);
+}
+
+function initializeDiagnostics() {
+  diagnostics = createDesktopDiagnostics({
+    logPath: resolveDesktopLogPath(app.getPath("userData")),
+  });
+
+  console.log(`[kanvibe] Desktop diagnostics log: ${diagnostics.logPath}`);
+
+  for (const entry of pendingDiagnosticEvents.splice(0)) {
+    diagnostics.log(entry.event, entry.payload);
+  }
+}
+
+function registerProcessDiagnostics() {
+  process.on("uncaughtException", (error) => {
+    logDiagnostic("main:uncaught-exception", { error: serializeErrorForLog(error) });
+    console.error("[kanvibe] uncaught exception:", error);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logDiagnostic("main:unhandled-rejection", { reason: serializeErrorForLog(reason) });
+    console.error("[kanvibe] unhandled rejection:", reason);
+  });
+
+  app.on("child-process-gone", (_event, details) => {
+    logDiagnostic("main:child-process-gone", details);
+  });
+}
+
+function normalizeConsoleMessage(args) {
+  const [first, second, third, fourth] = args;
+  if (first && typeof first === "object" && "message" in first) {
+    return first;
+  }
+
+  return {
+    level: first,
+    message: second,
+    line: third,
+    sourceId: fourth,
+  };
+}
+
+function getIpcSenderUrl(event) {
+  try {
+    return event.sender.getURL();
+  } catch {
+    return null;
+  }
+}
+
+function attachRendererDiagnostics(browserWindow) {
+  const { webContents } = browserWindow;
+
+  webContents.on("did-start-loading", () => {
+    logDiagnostic("renderer:did-start-loading", { url: webContents.getURL() });
+  });
+
+  webContents.on("did-finish-load", () => {
+    logDiagnostic("renderer:did-finish-load", { url: webContents.getURL() });
+  });
+
+  webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    logDiagnostic("renderer:did-fail-load", {
+      errorCode,
+      errorDescription,
+      validatedURL,
+      isMainFrame,
+      currentUrl: webContents.getURL(),
+    });
+  });
+
+  webContents.on("render-process-gone", (_event, details) => {
+    logDiagnostic("renderer:render-process-gone", {
+      url: webContents.getURL(),
+      details,
+    });
+  });
+
+  webContents.on("console-message", (_event, ...args) => {
+    logDiagnostic("renderer:console-message", normalizeConsoleMessage(args));
+  });
+
+  webContents.on("preload-error", (_event, preloadPath, error) => {
+    logDiagnostic("renderer:preload-error", {
+      preloadPath,
+      error: serializeErrorForLog(error),
+    });
+  });
+}
+
+registerProcessDiagnostics();
+
+function broadcastNotificationsChanged() {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send("kanvibe:notifications-changed");
+    }
+  }
+}
+
+function broadcastNotificationActivated(appNotification) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    sendNotificationActivated(window, appNotification);
+  }
+}
+
+function sendNotificationActivated(browserWindow, appNotification) {
+  if (!browserWindow || browserWindow.isDestroyed()) {
+    return;
+  }
+
+  browserWindow.webContents.send("kanvibe:notification-activated", appNotification);
+}
+
+function getBuildMainRoot() {
+  return path.join(app.getAppPath(), "build", "main", "src");
+}
+
+function getRuntimeModulePath(relativePath) {
+  if (SHOULD_USE_SOURCE_MODULES) {
+    return path.join(app.getAppPath(), relativePath);
+  }
+
+  return path.join(app.getAppPath(), "build", "main", relativePath.replace(/\.ts$/, ".js"));
+}
+
+function getWindowOpenHelpers() {
+  if (!windowOpenHelpers) {
+    windowOpenHelpers = require(getRuntimeModulePath(path.join("src", "desktop", "main", "windowOpen.ts")));
+  }
+
+  return windowOpenHelpers;
+}
+
+function getKeyboardShortcutHelpers() {
+  if (!keyboardShortcutHelpers) {
+    keyboardShortcutHelpers = require(getRuntimeModulePath(path.join("src", "desktop", "shared", "keyboardShortcut.ts")));
+  }
+
+  return keyboardShortcutHelpers;
+}
+
+function registerRuntimeAliases() {
+  if (SHOULD_USE_SOURCE_MODULES || Module._resolveFilename !== originalResolveFilename) {
+    return;
+  }
+
+  Module._resolveFilename = function resolveWithBuildAliases(request, parent, isMain, options) {
+    if (request.startsWith("@/")) {
+      const aliasedRequest = path.join(getBuildMainRoot(), request.slice(2));
+      return originalResolveFilename.call(this, aliasedRequest, parent, isMain, options);
+    }
+
+    return originalResolveFilename.call(this, request, parent, isMain, options);
+  };
+}
+
+function getRuntimeWorkingDirectory() {
+  const appRoot = app.getAppPath();
+  if (app.isPackaged && appRoot.endsWith(".asar")) {
+    return process.resourcesPath;
+  }
+
+  return appRoot;
+}
+
+function getMacLocalCommandSearchPaths() {
+  const homeDirectory = process.env.HOME || os.homedir();
+  return [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/opt/local/bin",
+    "/opt/local/sbin",
+    path.join(homeDirectory, ".local", "bin"),
+    path.join(homeDirectory, ".cargo", "bin"),
+    path.join(homeDirectory, ".opencode", "bin"),
+    path.join(homeDirectory, "Library", "pnpm"),
+    path.join(homeDirectory, ".bun", "bin"),
+  ];
+}
+
+function mergePathEntries(pathValues) {
+  const pathEntries = pathValues
+    .flatMap((pathValue) => String(pathValue || "").split(path.delimiter))
+    .map((pathEntry) => pathEntry.trim())
+    .filter(Boolean);
+
+  return [...new Set(pathEntries)].join(path.delimiter);
+}
+
+function ensureMacLocalCommandPath() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  process.env.PATH = mergePathEntries([
+    process.env.PATH,
+    ...getMacLocalCommandSearchPaths(),
+  ]);
+}
+
+function ensureRuntimeEnvironment() {
+  const appRoot = app.getAppPath();
+  process.chdir(getRuntimeWorkingDirectory());
+  ensureMacLocalCommandPath();
+  process.env.KANVIBE_DESKTOP = "true";
+  process.env.KANVIBE_HOST = HOOK_SERVER_HOST;
+  process.env.KANVIBE_APP_DATA_DIR = app.getPath("userData");
+  process.env.KANVIBE_SEED_DB_PATH = app.isPackaged
+    ? path.join(process.resourcesPath, "database", "app.seed.db")
+    : path.join(appRoot, "resources", "database", "app.seed.db");
+}
+
+function getRendererEntryPath() {
+  const appRoot = app.getAppPath();
+  return path.join(appRoot, "build", "renderer", "index.html");
+}
+
+function getDefaultRoute() {
+  return `/${DEFAULT_LOCALE}`;
+}
+
+function isTaskDetailRouteUrl(url) {
+  return /#\/[^/]+\/task\/[^/?#]+(?:[?#]|$)/.test(url || "");
+}
+
+function getRendererNavigationUrl(target = getDefaultRoute()) {
+  if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("file://")) {
+    return target;
+  }
+
+  const normalizedTarget = target.startsWith("/") ? target : `/${target}`;
+
+  if (RENDERER_DEV_URL) {
+    const rendererUrl = new URL(RENDERER_DEV_URL);
+    rendererUrl.hash = normalizedTarget;
+    return rendererUrl.href;
+  }
+
+  return `${pathToFileURL(getRendererEntryPath()).href}#${normalizedTarget}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRendererLoadAbort(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (typeof error === "object" && error.code === "ERR_ABORTED") {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("ERR_ABORTED");
+}
+
+async function didRendererRecoverFromLoadAbort(browserWindow, targetUrl) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < RENDERER_ABORT_RECOVERY_TIMEOUT_MS) {
+    if (browserWindow.isDestroyed()) {
+      return false;
+    }
+
+    if (browserWindow.webContents.getURL() === targetUrl) {
+      return true;
+    }
+
+    await delay(RENDERER_ABORT_RECOVERY_INTERVAL_MS);
+  }
+
+  return false;
+}
+
+function getTitleBarOptions() {
+  if (process.platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+    };
+  }
+
+  return {
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#ffffff",
+      symbolColor: "#111827",
+      height: 40,
+    },
+  };
+}
+
+function createBrowserWindowOptions() {
+  return {
+    width: 1600,
+    height: 1000,
+    minWidth: 1200,
+    minHeight: 800,
+    backgroundColor: "#ffffff",
+    autoHideMenuBar: true,
+    ...getTitleBarOptions(),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      disableBlinkFeatures: "ServiceWorker",
+    },
+  };
+}
+
+function normalizeNotificationLocale(locale) {
+  if (typeof locale !== "string") {
+    return DEFAULT_LOCALE;
+  }
+
+  if (locale.startsWith("en")) {
+    return "en";
+  }
+
+  if (locale.startsWith("zh")) {
+    return "zh";
+  }
+
+  return DEFAULT_LOCALE;
+}
+
+function getDesktopNotificationLocale() {
+  const activeWindow = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) || null;
+
+  const currentUrl = activeWindow?.webContents.getURL() || "";
+  const matchedLocale = currentUrl.match(/#\/([^/?#]+)/)?.[1];
+  if (matchedLocale) {
+    return normalizeNotificationLocale(matchedLocale);
+  }
+
+  return normalizeNotificationLocale(app.getLocale() || DEFAULT_LOCALE);
+}
+
+function createDesktopNotificationOptions() {
+  return {
+    onNotificationsChanged: broadcastNotificationsChanged,
+    onNotificationClick: async (appNotification) => {
+      await activateAppNotification(appNotification, { markAsRead: false });
+    },
+  };
+}
+
+function getNotificationTargetPath(appNotification) {
+  return appNotification.taskId
+    ? `/${appNotification.locale}/task/${appNotification.taskId}`
+    : appNotification.relativePath;
+}
+
+function getAvailableWindows() {
+  return BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+}
+
+function focusWindow(window) {
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+
+  if (window.isMinimized()) {
+    window.restore();
+  }
+
+  window.show();
+  window.focus();
+}
+
+function registerAppWindow(browserWindow) {
+  mainWindow = browserWindow;
+  attachWindowHandlers(browserWindow);
+  attachRendererDiagnostics(browserWindow);
+
+  browserWindow.on("focus", () => {
+    if (!browserWindow.isDestroyed()) {
+      mainWindow = browserWindow;
+    }
+  });
+
+  browserWindow.on("closed", () => {
+    if (mainWindow === browserWindow) {
+      mainWindow = getAvailableWindows()[0] || null;
+    }
+  });
+}
+
+async function focusMainWindow(relativePath) {
+  const targetUrl = relativePath ? getRendererNavigationUrl(relativePath) : null;
+  const availableWindows = getAvailableWindows();
+  const fallbackWindow = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : availableWindows[0] || null;
+
+  if (targetUrl) {
+    const { resolveNavigationTargetWindow } = getWindowOpenHelpers();
+    mainWindow = resolveNavigationTargetWindow({
+      preferredWindow: fallbackWindow,
+      targetUrl,
+      rendererDevUrl: RENDERER_DEV_URL,
+      openWindows: availableWindows,
+      getWindowUrl: (window) => window.webContents.getURL(),
+    });
+  } else {
+    mainWindow = fallbackWindow;
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    await createMainWindow(relativePath);
+  }
+
+  if (!mainWindow) {
+    return;
+  }
+
+  focusWindow(mainWindow);
+
+  if (!relativePath) {
+    return;
+  }
+
+  if (mainWindow.webContents.getURL() !== targetUrl) {
+    await mainWindow.loadURL(targetUrl);
+  }
+}
+
+async function focusTaskNotificationWindow(relativePath) {
+  const targetUrl = getRendererNavigationUrl(relativePath);
+  const { resolveExistingNavigationTargetWindow } = getWindowOpenHelpers();
+  const existingWindow = resolveExistingNavigationTargetWindow({
+    targetUrl,
+    rendererDevUrl: RENDERER_DEV_URL,
+    openWindows: getAvailableWindows(),
+    getWindowUrl: (window) => window.webContents.getURL(),
+  });
+
+  if (existingWindow) {
+    mainWindow = existingWindow;
+  } else {
+    mainWindow = await createAppWindow(relativePath);
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  focusWindow(mainWindow);
+
+  if (mainWindow.webContents.getURL() !== targetUrl) {
+    await mainWindow.loadURL(targetUrl);
+  }
+}
+
+async function focusExistingInternalRoute(relativePath, sourceWebContents) {
+  const targetUrl = getRendererNavigationUrl(relativePath);
+  const sourceWindow = sourceWebContents ? BrowserWindow.fromWebContents(sourceWebContents) : null;
+  const { resolveExistingNavigationTargetWindow } = getWindowOpenHelpers();
+  const existingWindow = resolveExistingNavigationTargetWindow({
+    targetUrl,
+    rendererDevUrl: RENDERER_DEV_URL,
+    openWindows: getAvailableWindows(),
+    getWindowUrl: (window) => window.webContents.getURL(),
+    excludeWindow: sourceWindow,
+  });
+
+  if (!existingWindow) {
+    return false;
+  }
+
+  mainWindow = existingWindow;
+  focusWindow(existingWindow);
+
+  if (existingWindow.webContents.getURL() !== targetUrl) {
+    await existingWindow.loadURL(targetUrl);
+  }
+
+  return true;
+}
+
+function getNotificationStore() {
+  return require(getRuntimeModulePath(path.join("src", "desktop", "main", "notificationStore.ts")));
+}
+
+async function activateAppNotification(appNotification, options = {}) {
+  const notificationStore = getNotificationStore();
+  const markAsRead = options.markAsRead !== false;
+  let activatedNotification = appNotification;
+
+  if (markAsRead && !appNotification.isRead) {
+    const updatedNotification = await notificationStore.markNotificationRead(appNotification.id);
+    if (updatedNotification) {
+      activatedNotification = updatedNotification;
+    }
+    broadcastNotificationsChanged();
+  }
+
+  pendingNotificationActivation = activatedNotification;
+  const { shouldKeepCurrentRouteForNotificationActivation } = getWindowOpenHelpers();
+  if (shouldKeepCurrentRouteForNotificationActivation(activatedNotification)) {
+    await focusMainWindow();
+    sendNotificationActivated(mainWindow, activatedNotification);
+    return true;
+  }
+
+  const targetPath = getNotificationTargetPath(activatedNotification);
+  if (activatedNotification.taskId) {
+    await focusTaskNotificationWindow(targetPath);
+  } else {
+    await focusMainWindow(targetPath);
+  }
+  broadcastNotificationActivated(activatedNotification);
+  return true;
+}
+
+function registerNotificationHandlers() {
+  const { deliverDesktopNotification } = require(getRuntimeModulePath(path.join("src", "desktop", "main", "services", "desktopNotificationService.ts")));
+  const { listNotifications, markAllNotificationsRead, markNotificationRead, getNotificationById } = getNotificationStore();
+
+  ipcMain.handle("kanvibe:show-notification", async (_event, payload) => {
+    return deliverDesktopNotification(payload, createDesktopNotificationOptions());
+  });
+
+  ipcMain.handle("kanvibe:notifications-list", async () => {
+    return listNotifications();
+  });
+
+  ipcMain.handle("kanvibe:notifications-mark-read", async (_event, notificationId) => {
+    const notification = await markNotificationRead(notificationId);
+    broadcastNotificationsChanged();
+    return notification;
+  });
+
+  ipcMain.handle("kanvibe:notifications-mark-all-read", async () => {
+    await markAllNotificationsRead();
+    broadcastNotificationsChanged();
+  });
+
+  ipcMain.handle("kanvibe:notifications-activate", async (_event, notificationId) => {
+    const notification = await getNotificationById(notificationId);
+    if (!notification) {
+      return false;
+    }
+
+    return activateAppNotification(notification);
+  });
+
+  ipcMain.handle("kanvibe:notifications-consume-activation", async () => {
+    const nextActivation = pendingNotificationActivation;
+    pendingNotificationActivation = null;
+    return nextActivation;
+  });
+}
+
+function attachWindowHandlers(browserWindow) {
+  browserWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const { resolveWindowOpenAction } = getWindowOpenHelpers();
+    const windowOpenAction = resolveWindowOpenAction({
+      targetUrl: url,
+      rendererDevUrl: RENDERER_DEV_URL,
+      openWindows: getAvailableWindows(),
+      getWindowUrl: (window) => window.webContents.getURL(),
+      excludeWindow: browserWindow,
+    });
+
+    if (windowOpenAction.type === "focus-existing") {
+      mainWindow = windowOpenAction.existingWindow;
+      focusWindow(windowOpenAction.existingWindow);
+      return { action: "deny" };
+    }
+
+    if (windowOpenAction.type === "open-internal") {
+      return {
+        action: "allow",
+        outlivesOpener: true,
+        overrideBrowserWindowOptions: createBrowserWindowOptions(),
+      };
+    }
+
+    void shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  browserWindow.webContents.on("did-create-window", (childWindow) => {
+    registerAppWindow(childWindow);
+  });
+
+  browserWindow.webContents.on("before-input-event", (event, input) => {
+    const {
+      DESKTOP_SHORTCUTS,
+      getShortcutPlatformFromProcessPlatform,
+      isBlockedElectronShortcutInput,
+      matchElectronShortcutInput,
+      matchTaskDetailDockShortcutInput,
+    } = getKeyboardShortcutHelpers();
+    const shortcutPlatform = getShortcutPlatformFromProcessPlatform(process.platform);
+    const isBlockedShortcut = isBlockedElectronShortcutInput(input, shortcutPlatform);
+    const isNotificationShortcut = matchElectronShortcutInput(input, DESKTOP_SHORTCUTS.notificationCenter, shortcutPlatform);
+    const isCreateTaskShortcut = matchElectronShortcutInput(input, DESKTOP_SHORTCUTS.createTask, shortcutPlatform);
+    const isNewWindowShortcut = matchElectronShortcutInput(input, DESKTOP_SHORTCUTS.newWindow, shortcutPlatform);
+    const taskDetailDockShortcutIndex = isTaskDetailRouteUrl(browserWindow.webContents.getURL())
+      ? matchTaskDetailDockShortcutInput(input, shortcutPlatform)
+      : null;
+
+    if (isBlockedShortcut) {
+      event.preventDefault();
+      return;
+    }
+
+    if (isNotificationShortcut) {
+      event.preventDefault();
+
+      browserWindow.webContents.send("kanvibe:notification-shortcut");
+      return;
+    }
+
+    if (isCreateTaskShortcut) {
+      event.preventDefault();
+
+      browserWindow.webContents.send("kanvibe:create-task-shortcut");
+      return;
+    }
+
+    if (isNewWindowShortcut) {
+      event.preventDefault();
+
+      const currentUrl = browserWindow.webContents.getURL() || getRendererNavigationUrl();
+      void createAppWindow(currentUrl);
+    }
+
+    if (taskDetailDockShortcutIndex !== null) {
+      event.preventDefault();
+
+      browserWindow.webContents.send("kanvibe:task-detail-dock-shortcut", taskDetailDockShortcutIndex);
+    }
+  });
+}
+
+async function waitForServer(url, retries = 80) {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const isReady = await new Promise((resolve) => {
+      const request = http.get(url, (response) => {
+        response.resume();
+        resolve(response.statusCode && response.statusCode < 500);
+      });
+
+      request.on("error", () => resolve(false));
+      request.setTimeout(1000, () => {
+        request.destroy();
+        resolve(false);
+      });
+    });
+
+    if (isReady) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error(`Renderer did not become ready on ${url}`);
+}
+
+function registerDesktopHandlers() {
+  const { desktopServices } = require(getRuntimeModulePath(path.join("src", "desktop", "main", "serviceRegistry.ts")));
+  const {
+    openTerminal,
+    writeTerminal,
+    resizeTerminal,
+    focusTerminal,
+    closeTerminal,
+    closeWindowTerminals,
+  } = require(getRuntimeModulePath(path.join("src", "desktop", "main", "terminalBridge.ts")));
+
+  ipcMain.on("kanvibe:renderer-log", (_event, payload) => {
+    logDiagnostic("renderer:bridge", payload);
+  });
+
+  ipcMain.handle("kanvibe:invoke", async (event, namespace, method, args) => {
+    const requestId = nextIpcRequestId;
+    nextIpcRequestId += 1;
+    const startedAt = Date.now();
+
+    logDiagnostic("ipc:invoke-start", {
+      requestId,
+      namespace,
+      method,
+      senderUrl: getIpcSenderUrl(event),
+    });
+
+    try {
+      const service = desktopServices[namespace];
+      if (!service) {
+        throw new Error(`Unknown desktop service namespace: ${namespace}`);
+      }
+
+      const targetMethod = service[method];
+      if (typeof targetMethod !== "function") {
+        throw new Error(`Unknown desktop service method: ${namespace}.${method}`);
+      }
+
+      const result = await targetMethod(...(Array.isArray(args) ? args : []));
+      logDiagnostic("ipc:invoke-succeeded", {
+        requestId,
+        namespace,
+        method,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      logDiagnostic("ipc:invoke-failed", {
+        requestId,
+        namespace,
+        method,
+        durationMs: Date.now() - startedAt,
+        error: serializeErrorForLog(error),
+      });
+      throw error;
+    }
+  });
+
+  ipcMain.handle("kanvibe:focus-existing-internal-route", async (event, relativePath) => {
+    return focusExistingInternalRoute(relativePath, event.sender);
+  });
+
+  ipcMain.handle("kanvibe:terminal-open", async (event, taskId, cols, rows) => {
+    return openTerminal(event.sender, taskId, cols, rows);
+  });
+
+  ipcMain.on("kanvibe:terminal-write", (event, taskId, data) => {
+    writeTerminal(event.sender.id, taskId, data);
+  });
+
+  ipcMain.on("kanvibe:terminal-resize", (event, taskId, cols, rows) => {
+    resizeTerminal(event.sender.id, taskId, cols, rows);
+  });
+
+  ipcMain.on("kanvibe:terminal-focus", (_event, taskId) => {
+    focusTerminal(taskId);
+  });
+
+  ipcMain.on("kanvibe:terminal-close", (event, taskId) => {
+    closeTerminal(event.sender.id, taskId);
+  });
+
+  app.on("web-contents-created", (_createdEvent, webContents) => {
+    if (process.env.KANVIBE_DEBUG_TERMINAL === "true") {
+      console.log(`[터미널-진단] webContents 생성됨: id=${webContents.id}, url=${webContents.getURL?.() || "?"}`);
+    }
+    webContents.once("destroyed", () => {
+      if (process.env.KANVIBE_DEBUG_TERMINAL === "true") {
+        console.log(`[터미널-진단] webContents.destroyed → closeWindowTerminals 호출: id=${webContents.id}`);
+      }
+      closeWindowTerminals(webContents.id);
+    });
+    /** dev 환경에서 vite HMR이 페이지 reload 시 어떤 이벤트를 발생시키는지 추적 */
+    if (process.env.KANVIBE_DEBUG_TERMINAL === "true") {
+      webContents.on("did-start-loading", () => {
+        console.log(`[터미널-진단] webContents.did-start-loading: id=${webContents.id}`);
+      });
+      webContents.on("did-finish-load", () => {
+        console.log(`[터미널-진단] webContents.did-finish-load: id=${webContents.id}, url=${webContents.getURL()}`);
+      });
+      webContents.on("did-navigate", (_evt, url) => {
+        console.log(`[터미널-진단] webContents.did-navigate: id=${webContents.id}, url=${url}`);
+      });
+      webContents.on("render-process-gone", (_evt, details) => {
+        console.log(`[터미널-진단] webContents.render-process-gone: id=${webContents.id}, reason=${details.reason}`);
+      });
+    }
+  });
+}
+
+function registerBoardEventForwarding() {
+  const { subscribeToBoardEvents } = require(getRuntimeModulePath(path.join("src", "lib", "boardNotifier.ts")));
+  const { deliverBoardEventNotification } = require(getRuntimeModulePath(path.join("src", "desktop", "main", "services", "desktopNotificationService.ts")));
+
+  return subscribeToBoardEvents((payload) => {
+    void (async () => {
+      try {
+        await deliverBoardEventNotification(payload, getDesktopNotificationLocale(), createDesktopNotificationOptions());
+      } catch (error) {
+        console.error("[kanvibe] board event notification failed:", error);
+      }
+
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send("kanvibe:board-event", payload);
+        }
+      }
+    })();
+  });
+}
+
+function startHookServer() {
+  const { createHookServer } = require(path.join(app.getAppPath(), "electron", "hookServer.js"));
+  hookServer = createHookServer({ host: HOOK_SERVER_HOST, port: HOOK_SERVER_PORT });
+}
+
+function configureHookEndpointPort() {
+  const { setHookServerPort } = require(getRuntimeModulePath(path.join("src", "lib", "hookEndpoint.ts")));
+  setHookServerPort(HOOK_SERVER_PORT);
+}
+
+async function loadRenderer(window, targetUrl = getRendererNavigationUrl()) {
+  logDiagnostic("renderer:load-start", {
+    targetUrl,
+    rendererDevUrl: RENDERER_DEV_URL,
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+  });
+
+  if (RENDERER_DEV_URL) {
+    await waitForServer(RENDERER_DEV_URL);
+  } else {
+    const rendererEntryPath = getRendererEntryPath();
+    if (!fs.existsSync(rendererEntryPath)) {
+      throw new Error(`Renderer build not found: ${rendererEntryPath}`);
+    }
+  }
+
+  try {
+    await window.loadURL(targetUrl);
+    logDiagnostic("renderer:load-complete", { targetUrl });
+  } catch (error) {
+    if (isRendererLoadAbort(error) && await didRendererRecoverFromLoadAbort(window, targetUrl)) {
+      logDiagnostic("renderer:load-aborted-recovered", {
+        targetUrl,
+        error: serializeErrorForLog(error),
+      });
+      return;
+    }
+
+    logDiagnostic("renderer:load-failed", {
+      targetUrl,
+      error: serializeErrorForLog(error),
+    });
+    throw error;
+  }
+}
+
+async function createAppWindow(target = getRendererNavigationUrl()) {
+  const browserWindow = new BrowserWindow(createBrowserWindowOptions());
+  registerAppWindow(browserWindow);
+
+  await loadRenderer(browserWindow, getRendererNavigationUrl(target));
+
+  return browserWindow;
+}
+
+async function createMainWindow(target) {
+  return createAppWindow(target);
+}
+
+app.whenReady().then(async () => {
+  initializeDiagnostics();
+  ensureRuntimeEnvironment();
+  diagnostics.log("main:startup", {
+    appPath: app.getAppPath(),
+    userDataPath: app.getPath("userData"),
+    resourcesPath: process.resourcesPath,
+    cwd: process.cwd(),
+    isPackaged: app.isPackaged,
+    rendererDevUrl: RENDERER_DEV_URL,
+    seedDbPath: process.env.KANVIBE_SEED_DB_PATH,
+  });
+
+  registerRuntimeAliases();
+  configureHookEndpointPort();
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === "notifications");
+  });
+
+  registerDesktopHandlers();
+  const unsubscribeBoardEvents = registerBoardEventForwarding();
+  startHookServer();
+  registerNotificationHandlers();
+
+  await createMainWindow();
+  const { startBackgroundTaskSync } = require(getRuntimeModulePath(path.join("src", "desktop", "main", "services", "backgroundTaskSyncService.ts")));
+  stopBackgroundTaskSync = startBackgroundTaskSync();
+
+  app.on("activate", async () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      await createMainWindow();
+    }
+  });
+
+  app.on("before-quit", () => {
+    stopBackgroundTaskSync?.();
+    stopBackgroundTaskSync = null;
+    unsubscribeBoardEvents();
+    hookServer?.close();
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});

@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { useRouter } from "@/i18n/navigation";
-import { getTasksByStatus } from "@/app/actions/kanban";
+import { usePathname, useRouter } from "@/desktop/renderer/navigation";
+import { getTasksByStatus } from "@/desktop/renderer/actions/kanban";
+import { navigateToTaskDetail } from "@/desktop/renderer/utils/taskNavigation";
 import { TaskStatus } from "@/entities/KanbanTask";
 import type { KanbanTask } from "@/entities/KanbanTask";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface ProjectBranchTasksModalProps {
   projectId: string;
@@ -21,12 +23,11 @@ const COLUMNS = [
 
 export default function ProjectBranchTasksModal({
   projectId,
-  currentBranchName,
   onClose,
 }: ProjectBranchTasksModalProps) {
   const t = useTranslations("board.columns");
-  const tc = useTranslations("common");
   const router = useRouter();
+  const pathname = usePathname();
   const [tasksByStatus, setTasksByStatus] = useState<Record<TaskStatus, KanbanTask[]>>({
     [TaskStatus.TODO]: [],
     [TaskStatus.PROGRESS]: [],
@@ -35,6 +36,8 @@ export default function ProjectBranchTasksModal({
     [TaskStatus.DONE]: [],
   }); // 모달에서는 TODO, PENDING, REVIEW만 표시
   const [isLoading, setIsLoading] = useState(true);
+
+  useEscapeKey(onClose);
 
   // 같은 프로젝트의 작업 로드
   useEffect(() => {
@@ -65,8 +68,11 @@ export default function ProjectBranchTasksModal({
     })();
   }, [projectId]);
 
-  const handleTaskClick = (taskId: string) => {
-    router.push(`/task/${taskId}`);
+  const handleTaskClick = async (taskId: string) => {
+    await navigateToTaskDetail(taskId, {
+      currentLocale: pathname.split("/").filter(Boolean)[0],
+      navigate: router.push,
+    });
     onClose();
   };
 

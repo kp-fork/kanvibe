@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { forwardRef, useState, useEffect, useRef, useCallback, useImperativeHandle, useMemo } from "react";
 import type { Project } from "@/entities/Project";
 
 const MAX_VISIBLE_CHIPS = 2;
+const EMPTY_SELECTED_PROJECT_IDS: string[] = [];
 
 type BaseProps = {
   projects: Project[];
@@ -28,7 +29,24 @@ type MultiSelectProps = BaseProps & {
 
 type ProjectSelectorProps = SingleSelectProps | MultiSelectProps;
 
-export default function ProjectSelector(props: ProjectSelectorProps) {
+export interface ProjectSelectorHandle {
+  close: () => void;
+  focus: () => void;
+  open: () => void;
+}
+
+function matchesProjectSearch(project: Project, query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return [project.name, project.repoPath, project.sshHost ?? ""]
+    .some((value) => value.toLowerCase().includes(normalizedQuery));
+}
+
+const ProjectSelector = forwardRef<ProjectSelectorHandle, ProjectSelectorProps>(function ProjectSelector(props, ref) {
   const {
     projects,
     placeholder = "",
@@ -40,7 +58,7 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
 
   const selectedProjectIds = isMultiple
     ? (props as MultiSelectProps).selectedProjectIds
-    : [];
+    : EMPTY_SELECTED_PROJECT_IDS;
   const onSelectionChange = isMultiple
     ? (props as MultiSelectProps).onSelectionChange
     : undefined;
@@ -60,15 +78,39 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
   const isComposingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const optionItemRefs = useRef<Array<HTMLLIElement | null>>([]);
 
   const filteredProjects = searchQuery
-    ? projects.filter((p) =>
-        p.name.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+    ? projects.filter((project) => matchesProjectSearch(project, searchQuery))
     : projects;
+
+  const orderedProjects = useMemo(() => {
+    if (!isMultiple) {
+      return filteredProjects;
+    }
+
+    return [
+      ...filteredProjects.filter((project) => selectedProjectIds.includes(project.id)),
+      ...filteredProjects.filter((project) => !selectedProjectIds.includes(project.id)),
+    ];
+  }, [filteredProjects, isMultiple, selectedProjectIds]);
 
   /** 단일 선택 모드에서 "전체" 옵션은 검색 중이 아닐 때만 표시한다 */
   const showAllOption = !isMultiple && !!allOption && !searchQuery;
+  const singleTotalItems = (showAllOption ? 1 : 0) + filteredProjects.length;
+
+  const openDropdown = useCallback(() => {
+    setIsOpen(true);
+    setHighlightedIndex(isMultiple
+      ? (orderedProjects.length > 0 ? 0 : -1)
+      : (singleTotalItems > 0 ? 0 : -1));
+  }, [isMultiple, orderedProjects.length, singleTotalItems]);
+
+  const closeDropdown = useCallback(() => {
+    setIsOpen(false);
+    setSearchQuery("");
+    setHighlightedIndex(-1);
+  }, []);
 
   const singleDisplayText = (() => {
     if (isMultiple) return "";
@@ -88,13 +130,12 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
         containerRef.current &&
         !containerRef.current.contains(e.target as Node)
       ) {
-        setIsOpen(false);
-        setSearchQuery("");
+        closeDropdown();
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [closeDropdown]);
 
   /** 드롭다운이 열리면 검색 input에 포커스한다 */
   useEffect(() => {
@@ -102,6 +143,17 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
       searchInputRef.current.focus();
     }
   }, [isOpen]);
+
+  useImperativeHandle(ref, () => ({
+    close: closeDropdown,
+    focus() {
+      openDropdown();
+      requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+      });
+    },
+    open: openDropdown,
+  }), [closeDropdown, openDropdown]);
 
   const handleToggle = useCallback(
     (projectId: string) => {
@@ -112,22 +164,18 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
         onSelectionChange(nextIds);
       } else if (onSelect) {
         onSelect(projectId);
-        setSearchQuery("");
-        setIsOpen(false);
-        setHighlightedIndex(-1);
+        closeDropdown();
       }
     },
-    [isMultiple, selectedProjectIds, onSelectionChange, onSelect]
+    [closeDropdown, isMultiple, selectedProjectIds, onSelectionChange, onSelect]
   );
 
   const handleSelectAll = useCallback(() => {
     if (onSelect) {
       onSelect("");
-      setSearchQuery("");
-      setIsOpen(false);
-      setHighlightedIndex(-1);
+      closeDropdown();
     }
-  }, [onSelect]);
+  }, [closeDropdown, onSelect]);
 
   const removeChip = useCallback(
     (projectId: string, e: React.MouseEvent) => {
@@ -161,13 +209,29 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
     []
   );
 
+  const maxHighlightedIndex = isMultiple ? orderedProjects.length - 1 : singleTotalItems - 1;
+  const normalizedHighlightedIndex = isOpen && maxHighlightedIndex >= 0
+    ? Math.min(Math.max(highlightedIndex, 0), maxHighlightedIndex)
+    : -1;
+
+  /** 키보드로 하이라이트된 항목이 드롭다운 안에 보이도록 스크롤한다 */
+  useEffect(() => {
+    if (!isOpen || normalizedHighlightedIndex < 0) {
+      return;
+    }
+
+    optionItemRefs.current[normalizedHighlightedIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [isOpen, normalizedHighlightedIndex, searchQuery]);
+
   // ===== 멀티 선택 모드 =====
   if (isMultiple) {
     const handleMultiKeyDown = (e: React.KeyboardEvent) => {
       if (!isOpen) {
-        if (e.key === "ArrowDown" || e.key === "Enter") {
+        if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          setIsOpen(true);
+          openDropdown();
         }
         return;
       }
@@ -176,29 +240,27 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
         case "ArrowDown":
           e.preventDefault();
           setHighlightedIndex((prev) =>
-            prev < filteredProjects.length - 1 ? prev + 1 : 0
+            prev < orderedProjects.length - 1 ? prev + 1 : 0
           );
           break;
         case "ArrowUp":
           e.preventDefault();
           setHighlightedIndex((prev) =>
-            prev > 0 ? prev - 1 : filteredProjects.length - 1
+            prev > 0 ? prev - 1 : orderedProjects.length - 1
           );
           break;
         case "Enter":
           e.preventDefault();
           if (
-            highlightedIndex >= 0 &&
-            highlightedIndex < filteredProjects.length
+            normalizedHighlightedIndex >= 0 &&
+            normalizedHighlightedIndex < orderedProjects.length
           ) {
-            handleToggle(filteredProjects[highlightedIndex].id);
+            handleToggle(orderedProjects[normalizedHighlightedIndex].id);
           }
           break;
         case "Escape":
           e.preventDefault();
-          setIsOpen(false);
-          setSearchQuery("");
-          setHighlightedIndex(-1);
+          closeDropdown();
           break;
       }
     };
@@ -211,10 +273,14 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
       >
         {/* 트리거: 선택된 프로젝트 칩 또는 placeholder. 칩은 최대 2개까지 표시하고 나머지는 "+N" 배지로 축약한다 */}
         <div
-          onClick={() => setIsOpen(!isOpen)}
+          role="button"
+          tabIndex={0}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          onClick={() => (isOpen ? closeDropdown() : openDropdown())}
           className={`w-full px-2 bg-bg-page border rounded-md text-text-primary cursor-pointer flex items-center gap-1 overflow-hidden ${
             compact ? "py-1 min-h-[34px]" : "py-1.5 min-h-[38px]"
-          } ${isOpen ? "border-brand-primary" : "border-border-default"}`}
+          } ${isOpen ? "border-brand-primary" : "border-border-default"} focus:outline-none focus:border-brand-primary`}
         >
           {selectedProjects.length === 0 ? (
             <span className="text-text-muted text-sm px-1">{placeholder}</span>
@@ -279,18 +345,21 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
                   {placeholder}
                 </li>
               ) : (
-                filteredProjects.map((project, index) => {
+                orderedProjects.map((project, index) => {
                   const checked = selectedProjectIds.includes(project.id);
                   return (
                     <li
                       key={project.id}
+                      ref={(element) => {
+                        optionItemRefs.current[index] = element;
+                      }}
                       onMouseDown={(e) => {
                         e.preventDefault();
                         handleToggle(project.id);
                       }}
                       onMouseEnter={() => setHighlightedIndex(index)}
                       className={`flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors ${
-                        index === highlightedIndex
+                        index === normalizedHighlightedIndex
                           ? "bg-brand-primary/10 text-text-primary"
                           : "text-text-primary hover:bg-bg-page"
                       }`}
@@ -339,14 +408,11 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
   }
 
   // ===== 단일 선택 모드 =====
-  const singleTotalItems =
-    (showAllOption ? 1 : 0) + filteredProjects.length;
-
   const handleSingleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen) {
-      if (e.key === "ArrowDown" || e.key === "Enter") {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        setIsOpen(true);
+        openDropdown();
       }
       return;
     }
@@ -366,13 +432,13 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
         break;
       case "Enter":
         e.preventDefault();
-        if (highlightedIndex >= 0 && highlightedIndex < singleTotalItems) {
-          if (showAllOption && highlightedIndex === 0) {
+        if (normalizedHighlightedIndex >= 0 && normalizedHighlightedIndex < singleTotalItems) {
+          if (showAllOption && normalizedHighlightedIndex === 0) {
             handleSelectAll();
           } else {
             const projectIndex = showAllOption
-              ? highlightedIndex - 1
-              : highlightedIndex;
+              ? normalizedHighlightedIndex - 1
+              : normalizedHighlightedIndex;
             if (
               projectIndex >= 0 &&
               projectIndex < filteredProjects.length
@@ -384,9 +450,7 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
         break;
       case "Escape":
         e.preventDefault();
-        setIsOpen(false);
-        setSearchQuery("");
-        setHighlightedIndex(-1);
+        closeDropdown();
         break;
     }
   };
@@ -399,10 +463,14 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
     >
       {/* 트리거: 선택된 프로젝트명 또는 placeholder */}
       <div
-        onClick={() => setIsOpen(!isOpen)}
+        role="button"
+        tabIndex={0}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => (isOpen ? closeDropdown() : openDropdown())}
         className={`w-full px-2 bg-bg-page border rounded-md text-text-primary cursor-pointer flex items-center gap-1 ${
           compact ? "py-1 min-h-[34px]" : "py-1.5 min-h-[38px]"
-        } ${isOpen ? "border-brand-primary" : "border-border-default"}`}
+        } ${isOpen ? "border-brand-primary" : "border-border-default"} focus:outline-none focus:border-brand-primary`}
       >
         {singleDisplayText ? (
           <span className="text-sm px-1 truncate">{singleDisplayText}</span>
@@ -443,13 +511,16 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
           <ul className="max-h-48 overflow-y-auto">
             {showAllOption && (
               <li
+                ref={(element) => {
+                  optionItemRefs.current[0] = element;
+                }}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   handleSelectAll();
                 }}
                 onMouseEnter={() => setHighlightedIndex(0)}
                 className={`px-3 py-2 text-sm cursor-pointer transition-colors ${
-                  highlightedIndex === 0
+                  normalizedHighlightedIndex === 0
                     ? "bg-brand-primary/10 text-text-primary"
                     : "text-text-primary hover:bg-bg-page"
                 } ${!selectedProjectId ? "font-medium" : ""}`}
@@ -467,13 +538,16 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
                 return (
                   <li
                     key={project.id}
+                    ref={(element) => {
+                      optionItemRefs.current[itemIndex] = element;
+                    }}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       handleToggle(project.id);
                     }}
                     onMouseEnter={() => setHighlightedIndex(itemIndex)}
                     className={`px-3 py-2 text-sm cursor-pointer transition-colors ${
-                      itemIndex === highlightedIndex
+                      itemIndex === normalizedHighlightedIndex
                         ? "bg-brand-primary/10 text-text-primary"
                         : "text-text-primary hover:bg-bg-page"
                     } ${project.id === selectedProjectId ? "font-medium" : ""}`}
@@ -493,4 +567,6 @@ export default function ProjectSelector(props: ProjectSelectorProps) {
       )}
     </div>
   );
-}
+});
+
+export default ProjectSelector;

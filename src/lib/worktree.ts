@@ -3,16 +3,34 @@ import { writeFile } from "fs/promises";
 import { SessionType } from "@/entities/KanbanTask";
 import { PaneLayoutType, type PaneCommand } from "@/entities/PaneLayoutConfig";
 import { execGit } from "@/lib/gitOperations";
-import { getEffectivePaneLayout } from "@/app/actions/paneLayout";
+import { getEffectivePaneLayout } from "@/desktop/main/services/paneLayoutService";
 
 interface WorktreeSession {
   worktreePath: string;
   sessionName: string;
 }
 
+export interface TmuxPaneLayoutConfig {
+  layoutType: PaneLayoutType;
+  panes: PaneCommand[];
+}
+
 /** branchName을 세션 이름으로 변환한다. `/`를 `-`로 치환한다 */
 export function formatSessionName(projectName: string, branchName: string): string {
   return `${projectName}-${branchName}`.replace(/\//g, "-");
+}
+
+export function buildManagedWorktreePath(projectPath: string, branchName: string): string {
+  const projectName = path.basename(projectPath);
+  const worktreeBase = path.posix.join(
+    path.dirname(projectPath),
+    `${projectName}__worktrees`,
+  );
+
+  return path.posix.join(
+    worktreeBase,
+    branchName.replace(/\//g, "-"),
+  );
 }
 
 /** zellij 세션 이름을 소켓 경로 108바이트 제한에 맞게 truncate한다 */
@@ -22,20 +40,22 @@ export function sanitizeZellijSessionName(sessionName: string): string {
   return sessionName.slice(0, ZELLIJ_SESSION_NAME_MAX_LENGTH);
 }
 
+function buildTmuxCreateSessionCommand(sessionName: string, workingDir: string): string {
+  return `tmux new-session -d -s "${sessionName}" -c "${workingDir}"`;
+}
 
-/**
- * tmux 세션에 pane 레이아웃을 적용하고 각 pane에 시작 명령어를 실행한다.
- * 분할 실패 시에도 기본 window는 유지된다 (graceful fallback).
- */
-async function applyPaneLayout(
+function buildTmuxTarget(sessionName: string): string {
+  return `"${sessionName}":0`;
+}
+
+export function buildTmuxPaneLayoutCommands(
   sessionName: string,
   layoutType: PaneLayoutType,
   panes: PaneCommand[],
   worktreePath: string,
-): Promise<void> {
-  const target = `"${sessionName}":0`;
+): string[] {
+  const target = buildTmuxTarget(sessionName);
 
-  /** 레이아웃 타입에 따른 tmux split 명령어 시퀀스 */
   const splitCommands: Record<PaneLayoutType, string[]> = {
     [PaneLayoutType.SINGLE]: [],
     [PaneLayoutType.HORIZONTAL_2]: [
@@ -59,19 +79,34 @@ async function applyPaneLayout(
     ],
   };
 
-  const commands = splitCommands[layoutType];
-  for (const cmd of commands) {
-    await execGit(cmd);
-  }
+  const sendKeysCommands = panes
+    .filter((pane) => pane.command.trim())
+    .map((pane) => (
+      `tmux send-keys -t ${target}.${pane.position} "${pane.command}" Enter`
+    ));
 
-  /** 각 pane에 시작 명령어 전송 */
-  for (const pane of panes) {
-    if (pane.command.trim()) {
-      await execGit(
-        `tmux send-keys -t ${target}.${pane.position} "${pane.command}" Enter`,
-      );
-    }
-  }
+  return [
+    ...splitCommands[layoutType],
+    ...sendKeysCommands,
+  ];
+}
+
+export function buildTmuxSessionBootstrapCommands(
+  sessionName: string,
+  workingDir: string,
+  paneLayout?: TmuxPaneLayoutConfig | null,
+): string[] {
+  return [
+    buildTmuxCreateSessionCommand(sessionName, workingDir),
+    ...(paneLayout && paneLayout.layoutType !== PaneLayoutType.SINGLE
+      ? buildTmuxPaneLayoutCommands(
+          sessionName,
+          paneLayout.layoutType,
+          paneLayout.panes,
+          workingDir,
+        )
+      : []),
+  ];
 }
 
 /** KDL 문자열 내 특수문자를 이스케이프한다 */
@@ -174,6 +209,10 @@ export function generateZellijLayoutKdl(
 /** Zellij KDL 레이아웃 파일의 기본 파일명 */
 export const ZELLIJ_LAYOUT_FILENAME = ".zellij-layout.kdl";
 
+function quoteForPosixShell(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
 /**
  * KDL 레이아웃 파일을 worktree 디렉토리에 저장한다.
  * 터미널 연결 시 node-pty가 이 파일을 --layout 플래그로 사용한다.
@@ -187,35 +226,9 @@ async function writeLayoutToWorktree(
 }
 
 /**
- * pane 레이아웃을 백그라운드에서 적용한다.
- * task 생성 흐름을 차단하지 않으며, 실패해도 기본 window는 유지된다.
- */
-function applyPaneLayoutAsync(
-  sessionName: string,
-  worktreePath: string,
-  projectId?: string,
-): void {
-  (async () => {
-    try {
-      const layoutConfig = await getEffectivePaneLayout(projectId);
-      if (layoutConfig && layoutConfig.layoutType !== PaneLayoutType.SINGLE) {
-        await applyPaneLayout(
-          sessionName,
-          layoutConfig.layoutType as PaneLayoutType,
-          layoutConfig.panes,
-          worktreePath,
-        );
-      }
-    } catch (error) {
-      console.error("Pane 레이아웃 적용 실패 (기본 window 유지):", error);
-    }
-  })();
-}
-
-/**
  * git worktree를 생성하고 브랜치별 독립 세션을 생성한다.
- * 세션이 없으면 자동 생성한다. sshHost가 지정되면 원격에서 실행한다.
- * 로컬 세션인 경우 projectId를 기반으로 pane 레이아웃 설정을 적용한다.
+ * 세션은 터미널 연결 시점에 생성한다.
+ * 로컬 Zellij 세션인 경우 연결 시점에 사용할 KDL 레이아웃 파일만 준비한다.
  */
 export async function createWorktreeWithSession(
   projectPath: string,
@@ -226,14 +239,7 @@ export async function createWorktreeWithSession(
   projectId?: string | null,
 ): Promise<WorktreeSession> {
   const projectName = path.basename(projectPath);
-  const worktreeBase = path.posix.join(
-    path.dirname(projectPath),
-    `${projectName}__worktrees`,
-  );
-  const worktreePath = path.posix.join(
-    worktreeBase,
-    branchName.replace(/\//g, "-"),
-  );
+  const worktreePath = buildManagedWorktreePath(projectPath, branchName);
   const sessionName = formatSessionName(projectName, branchName);
 
   await execGit(
@@ -241,52 +247,40 @@ export async function createWorktreeWithSession(
     sshHost,
   );
 
-  if (sessionType === SessionType.TMUX) {
-    /** 동일 이름의 세션이 없을 때만 생성한다 */
-    const hasSession = await isSessionAlive(sessionType, sessionName, sshHost);
-    if (!hasSession) {
-      await execGit(
-        `tmux new-session -d -s "${sessionName}" -c "${worktreePath}"`,
-        sshHost,
-      );
-    }
+  try {
+    if (sessionType === SessionType.TMUX) {
+      return { worktreePath, sessionName };
+    } else {
+      /**
+       * Zellij는 TTY 없이 실행 불가하므로 서버에서 세션을 직접 시작하지 않는다.
+       * 세션 이름과 레이아웃 파일만 준비하고, 실제 세션 생성은
+       * 터미널 연결 시 node-pty가 PTY를 제공하며 처리한다.
+       */
+      const zellijSessionName = sanitizeZellijSessionName(sessionName);
 
-    /** 로컬 tmux인 경우 pane 레이아웃을 백그라운드로 적용 (task 생성을 차단하지 않음) */
-    if (!sshHost) {
-      applyPaneLayoutAsync(
-        sessionName,
-        worktreePath,
-        projectId ?? undefined,
-      );
-    }
-
-    return { worktreePath, sessionName };
-  } else {
-    /**
-     * Zellij는 TTY 없이 실행 불가하므로 서버에서 세션을 직접 시작하지 않는다.
-     * 세션 이름과 레이아웃 파일만 준비하고, 실제 세션 생성은
-     * 터미널 연결 시 node-pty가 PTY를 제공하며 처리한다.
-     */
-    const zellijSessionName = sanitizeZellijSessionName(sessionName);
-
-    /** 로컬 세션인 경우 KDL 레이아웃 파일을 worktree 디렉토리에 저장한다 */
-    if (!sshHost) {
-      try {
-        const layoutConfig = await getEffectivePaneLayout(projectId ?? undefined);
-        if (layoutConfig && layoutConfig.layoutType !== PaneLayoutType.SINGLE) {
-          const kdl = generateZellijLayoutKdl(
-            layoutConfig.layoutType as PaneLayoutType,
-            layoutConfig.panes,
-            worktreePath,
-          );
-          await writeLayoutToWorktree(worktreePath, kdl);
+      /** 로컬 세션인 경우 KDL 레이아웃 파일을 worktree 디렉토리에 저장한다 */
+      if (!sshHost) {
+        try {
+          const layoutConfig = await getEffectivePaneLayout(projectId ?? undefined);
+          if (layoutConfig && layoutConfig.layoutType !== PaneLayoutType.SINGLE) {
+            const kdl = generateZellijLayoutKdl(
+              layoutConfig.layoutType as PaneLayoutType,
+              layoutConfig.panes,
+              worktreePath,
+            );
+            await writeLayoutToWorktree(worktreePath, kdl);
+          }
+        } catch (error) {
+          console.error("Zellij 레이아웃 파일 생성 실패 (레이아웃 없이 세션 생성 예정):", error);
         }
-      } catch (error) {
-        console.error("Zellij 레이아웃 파일 생성 실패 (레이아웃 없이 세션 생성 예정):", error);
       }
-    }
 
-    return { worktreePath, sessionName: zellijSessionName };
+      return { worktreePath, sessionName: zellijSessionName };
+    }
+  } catch (sessionError) {
+    /** 세션 생성이 실패하면 이미 생성된 worktree와 브랜치를 정리해 다음 시도가 막히지 않도록 한다 */
+    await removeWorktreeAndBranch(projectPath, branchName, sshHost);
+    throw sessionError;
   }
 }
 
@@ -298,22 +292,16 @@ export async function createSessionWithoutWorktree(
   projectPath: string,
   branchName: string,
   sessionType: SessionType,
-  sshHost?: string | null,
-  workingDir?: string,
+  _sshHost?: string | null,
+  _workingDir?: string,
 ): Promise<{ sessionName: string }> {
+  void _sshHost;
+  void _workingDir;
+
   const projectName = path.basename(projectPath);
   const sessionName = formatSessionName(projectName, branchName);
-  const cwd = workingDir || projectPath;
 
   if (sessionType === SessionType.TMUX) {
-    const hasSession = await isSessionAlive(sessionType, sessionName, sshHost);
-    if (!hasSession) {
-      await execGit(
-        `tmux new-session -d -s "${sessionName}" -c "${cwd}"`,
-        sshHost,
-      );
-    }
-
     return { sessionName };
   } else {
     /**
@@ -325,33 +313,40 @@ export async function createSessionWithoutWorktree(
   }
 }
 
+interface ResourceCleanupOptions {
+  throwOnError?: boolean;
+}
+
 /** worktree와 브랜치를 삭제한다. 세션은 건드리지 않는다 */
 export async function removeWorktreeAndBranch(
   projectPath: string,
   branchName: string,
   sshHost?: string | null,
+  options: ResourceCleanupOptions = {},
 ): Promise<void> {
+  const worktreePath = buildManagedWorktreePath(projectPath, branchName);
+  const worktreeCommand = options.throwOnError
+    ? `if git -C "${projectPath}" worktree list --porcelain | grep -Fxq "worktree ${worktreePath}"; then git -C "${projectPath}" worktree remove "${worktreePath}" --force; fi`
+    : `git -C "${projectPath}" worktree remove "${worktreePath}" --force`;
+  const branchCommand = options.throwOnError
+    ? `if git -C "${projectPath}" show-ref --verify --quiet "refs/heads/${branchName}"; then git -C "${projectPath}" branch -D "${branchName}"; fi`
+    : `git -C "${projectPath}" branch -D "${branchName}"`;
+
   try {
-    const projectName = path.basename(projectPath);
-    const worktreeBase = path.posix.join(
-      path.dirname(projectPath),
-      `${projectName}__worktrees`,
-    );
-    const worktreePath = path.posix.join(
-      worktreeBase,
-      branchName.replace(/\//g, "-"),
-    );
-    await execGit(
-      `git -C "${projectPath}" worktree remove "${worktreePath}" --force`,
-      sshHost,
-    );
+    await execGit(worktreeCommand, sshHost);
   } catch {
+    if (options.throwOnError) {
+      throw new Error(`worktree 정리 실패: ${worktreePath}`);
+    }
     // worktree가 이미 삭제된 경우 무시
   }
 
   try {
-    await execGit(`git -C "${projectPath}" branch -D "${branchName}"`, sshHost);
+    await execGit(branchCommand, sshHost);
   } catch {
+    if (options.throwOnError) {
+      throw new Error(`브랜치 정리 실패: ${branchName}`);
+    }
     // 브랜치가 이미 삭제된 경우 무시
   }
 }
@@ -361,22 +356,58 @@ export async function removeSessionOnly(
   sessionType: SessionType,
   sessionName: string,
   sshHost?: string | null,
+  options: ResourceCleanupOptions = {},
 ): Promise<void> {
   try {
     if (sessionType === SessionType.TMUX) {
       await execGit(
-        `tmux kill-session -t "${sessionName}"`,
+        buildTmuxSessionCleanupCommand(sessionName, options.throwOnError === true),
         sshHost,
       );
     } else {
       await execGit(
-        `zellij kill-session "${sessionName}" 2>/dev/null || zellij delete-session "${sessionName}" 2>/dev/null`,
+        buildZellijSessionCleanupCommand(sessionName, options.throwOnError === true),
         sshHost,
       );
     }
   } catch {
+    if (options.throwOnError) {
+      throw new Error(`세션 정리 실패: ${sessionName}`);
+    }
     // 세션이 이미 종료된 경우 무시
   }
+}
+
+function buildTmuxSessionCleanupCommand(sessionName: string, verifyCleanup: boolean): string {
+  const target = quoteForPosixShell(sessionName);
+
+  if (!verifyCleanup) {
+    return `tmux kill-session -t ${target} 2>/dev/null || true`;
+  }
+
+  return [
+    "command -v tmux >/dev/null 2>&1 || exit 1",
+    `tmux kill-session -t ${target} 2>/dev/null || true`,
+    `if tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -Fx -- ${target} >/dev/null; then exit 1; fi`,
+  ].join("; ");
+}
+
+function buildZellijSessionCleanupCommand(sessionName: string, verifyCleanup: boolean): string {
+  const target = quoteForPosixShell(sessionName);
+  const commands = [
+    `zellij kill-sessions ${target} 2>/dev/null || true`,
+    `zellij delete-session ${target} 2>/dev/null || true`,
+  ];
+
+  if (!verifyCleanup) {
+    return commands.join("; ");
+  }
+
+  return [
+    "command -v zellij >/dev/null 2>&1 || exit 1",
+    ...commands,
+    `if zellij list-sessions 2>/dev/null | awk '{ if ($1 == "EXITED:") print $2; else print $1 }' | grep -Fx -- ${target} >/dev/null; then exit 1; fi`,
+  ].join("; ");
 }
 
 /**

@@ -1,12 +1,14 @@
 <div align="center">
 
+<img src="./docs/images/readme/kanvibe.png" alt="KanVibe app icon" width="120">
+
 # KanVibe
 
-**AI Agent Task Management Kanban Board**
+**Keyboard-first Kanban workspace for AI coding agents**
 
-A web-based terminal Kanban board for managing AI coding agent (Claude Code, Gemini CLI, Codex CLI, etc.) tasks in real-time.
-Monitor tmux/zellij sessions directly in your browser while tracking task progress on a drag & drop Kanban board.
-Automatically track task status via [AI Agent Hooks](#ai-agent-hooks---automatic-status-tracking) — no manual updates needed.
+KanVibe keeps AI coding work out of scattered terminal tabs. Track branch-based tasks on a real-time Kanban board, open each task's tmux/zellij session in the browser or desktop app, and let Claude Code, Gemini CLI, Codex CLI, and OpenCode hooks move tasks through the workflow automatically.
+
+Use shortcuts for project filters, task search, notifications, task detail panels, and common task actions without losing terminal focus.
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/rookedsysc)
 
@@ -18,71 +20,110 @@ Automatically track task status via [AI Agent Hooks](#ai-agent-hooks---automatic
 
 <div align="center">
 
-[![▶ Watch Demo on YouTube](https://img.youtube.com/vi/8JTrvd3T_Z0/maxresdefault.jpg)](https://www.youtube.com/watch?v=8JTrvd3T_Z0)
-
-**▶ [Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
-
 <table>
   <tr>
-    <td width="50%"><img src="./docs/images/detail-page.png" alt="Kanban Board" width="100%"></td>
-    <td width="50%"><img src="./docs/images/detail-page.png" alt="Task Detail & Terminal" width="100%"></td>
+    <td width="50%">
+      <img src="./docs/images/readme/kanvibe-main.png" alt="KanVibe Kanban board" width="100%">
+      <br>
+      <strong>Main Kanban board</strong>
+    </td>
+    <td width="50%">
+      <img src="./docs/images/readme/kanvibe-detail.png" alt="Task detail terminal workspace" width="100%">
+      <br>
+      <strong>Task detail workspace</strong>
+    </td>
   </tr>
 </table>
+
+<iframe
+  width="100%"
+  height="480"
+  src="https://www.youtube.com/embed/8JTrvd3T_Z0"
+  title="KanVibe demo"
+  frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  allowfullscreen>
+</iframe>
+
+**[Watch Demo on YouTube](https://www.youtube.com/watch?v=8JTrvd3T_Z0)**
 
 </div>
 
 ---
 
-## Prerequisites
+## Key Workflows
 
-The `kanvibe` CLI script automatically checks and installs missing dependencies. You can also install them manually:
+### 1. Quick Task Search
+
+Open task search from anywhere, filter by project or branch name, and jump directly into the task workspace without returning to the board first.
+
+<img src="./docs/images/readme/kanvibe-search-shortcut.png" alt="Quick task search shortcut" width="100%">
+
+### 2. Task Detail Shortcuts
+
+Use numbered dock shortcuts on a task detail page to open task metadata, hook status, AI chat, and PR actions before the keystroke reaches the embedded terminal.
+
+<img src="./docs/images/readme/kanvibe-detail-shortcut.png" alt="Task detail shortcut panel" width="100%">
+
+### 3. Project Filter
+
+Narrow the board to the active projects you care about, with keyboard navigation for switching between repositories quickly.
+
+<img src="./docs/images/readme/kanvibe-project-search-shortcut.png" alt="Project filter shortcut" width="100%">
+
+### 4. Notifications
+
+Open the notification panel to review AI agent status changes, background sync results, and task events, then jump to the related task.
+
+<img src="./docs/images/readme/kanvibe-notification-shortcut.png" alt="Notification shortcut panel" width="100%">
+
+### 5. Quick Task Actions
+
+Create follow-up branch TODOs directly from the highlighted search result, preserving project and branch context for the next piece of work.
+
+<img src="./docs/images/readme/kanvibe-quick-action-shortcut.png" alt="Quick task action shortcut" width="100%">
+
+---
+
+## Prerequisites
 
 | Dependency | Version | Required | Install |
 |------------|---------|----------|---------|
-| [Node.js](https://nodejs.org/) | >= 22 | Yes | `brew install node` |
-| [pnpm](https://pnpm.io/) | latest | Yes | `corepack enable && corepack prepare pnpm@latest --activate` |
-| [Docker](https://www.docker.com/) | latest | Yes | `brew install --cask docker` |
 | [git](https://git-scm.com/) | latest | Yes | `brew install git` |
 | [tmux](https://github.com/tmux/tmux) | latest | Yes | `brew install tmux` |
 | [gh](https://cli.github.com/) | latest | Yes | `brew install gh` (requires `gh auth login`) |
 | [zellij](https://github.com/zellij-org/zellij) | latest | No | `brew install zellij` |
 
-> Docker is used to run the PostgreSQL database via Docker Compose.
-
 ---
 
 ## Quick Start
 
-### 1. Configure Environment
+### Install with Homebrew
+
+Until KanVibe is accepted into the official Homebrew Cask repository, install it from the KanVibe Homebrew tap:
 
 ```bash
-cp .env.example .env
+brew install --cask rookedsysc/kanvibe/kanvibe
+open -a KanVibe
 ```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Web server port | `4885` |
-| `DB_PORT` | PostgreSQL port | `4886` |
-| `KANVIBE_USER` | Login username | `admin` |
-| `KANVIBE_PASSWORD` | Login password | `changeme` (change this!) |
-
-### 2. Run
+After the official Homebrew Cask is accepted, the install command becomes:
 
 ```bash
-bash kanvibe.sh start          # Interactive mode selection (foreground/background)
-bash kanvibe.sh start --fg     # Foreground (output to terminal, Ctrl+C to stop)
-bash kanvibe.sh start --bg     # Background (server keeps running after terminal closes)
+brew install --cask kanvibe
 ```
 
-This command checks dependencies (with i18n install prompts), installs packages, starts PostgreSQL, runs migrations, builds, and launches the server.
+### Update or Remove
 
 ```bash
-bash kanvibe.sh stop
+brew update
+brew upgrade --cask kanvibe
 ```
 
-Stops the KanVibe server and PostgreSQL container.
-
-Open `http://localhost:4885` in your browser.
+```bash
+brew uninstall --cask kanvibe
+brew untap rookedsysc/kanvibe
+```
 
 ---
 
@@ -91,6 +132,8 @@ Open `http://localhost:4885` in your browser.
 ### 1. Register a Project
 
 Search for your local git repository using the **fzf-style folder search** in project settings. KanVibe scans the directory and automatically detects existing worktree branches.
+
+To stop managing a project, delete it from project settings. This removes the project and its KanVibe tasks from the embedded SQLite database only; git branches, worktrees, and files on disk are kept.
 
 ### 2. Create Tasks
 
@@ -124,23 +167,51 @@ Each pane can run a custom command (e.g., `vim`, `htop`, `lazygit`, test runner,
 
 ## Features
 
-### Kanban Board
+### Real-Time Kanban Board
 - 5-status task management (TODO / PROGRESS / PENDING / REVIEW / DONE)
-- Custom task ordering with drag & drop
-- Multi-project filtering
-- Done column pagination
-- Real-time WebSocket updates
+- Drag & drop task ordering with project colors, priority markers, PR badges, and session labels
+- Multi-project filtering with keyboard search for visible project and task text
+- Done column pagination for long-running projects
+- Real-time WebSocket updates across browser and desktop windows
 
-### Git Worktree Integration
-- Automatic git worktree creation when a branch-based task is created
-- Worktree scanning: existing branches are auto-registered as TODO tasks
-- Automatic cleanup (branch + worktree + session) when task moves to DONE
+### Branch-Based Task Workspace
+- Create branch TODOs that automatically prepare a git worktree and terminal session
+- Scan existing worktree branches and register them as TODO tasks
+- Open each task into a dedicated terminal workspace with task metadata, hook controls, chat, and PR actions in the side dock
+- Move a task to DONE to clean up its branch, worktree, and terminal session automatically
+- Delete a project from settings without touching existing git branches, worktrees, or files on disk
 
 ### Terminal Sessions (tmux / zellij)
 - **tmux** and **zellij** are both supported as terminal multiplexers
-- Browser-based terminal via xterm.js + WebSocket
-- SSH remote terminal support (reads `~/.ssh/config`)
+- Browser-based terminal streaming through xterm.js and WebSocket
+- SSH remote terminal support that reads `~/.ssh/config`
+- Non-interactive remote SSH commands reuse an app-local ControlMaster socket pool under `~/.kanvibe`, with per-host concurrency capped at 4x available CPU cores
+- Remote terminal attach executes tmux/zellij directly over SSH; trusted X11 forwarding (`ssh -Y`) is requested only when local `DISPLAY`, remote `X11Forwarding`, and `xauth` are available
 - Nerd Font rendering support
+
+### Keyboard-First Controls
+- Open quick task search by branch or project name from anywhere
+- Filter projects, inspect notifications, and trigger task actions without leaving the board
+- Use numbered detail shortcuts to switch task info, status/hooks, AI chat, PR, and other dock panels before keystrokes reach the terminal
+- Create a branch TODO directly from quick search with the configured shortcut
+
+### Keyboard Shortcuts
+
+| Shortcut | Scope | Action |
+|----------|-------|--------|
+| `Cmd/Ctrl+F` | Board | Open page find for visible project/task text |
+| `Cmd/Ctrl+Shift+O` | Global | Open quick task search by branch or project name (default, configurable) |
+| `Cmd/Ctrl+Shift+P` | Board | Open the project filter dropdown |
+| `Cmd/Ctrl+Shift+I` | Board | Open the notifications dropdown |
+| `Cmd+[` / `Cmd+]` (macOS), `Alt+[` / `Alt+]` (Linux) | Global | Navigate back/forward through app history; back falls back to board home when there is no previous page |
+| `Cmd+1/2/3` (macOS), `Alt+1/2/3` (Linux) | Task detail | Activate the numbered detail dock items: info, status/hooks, and AI chat. These shortcuts are intercepted before terminal input |
+| `Cmd+4` (macOS), `Alt+4` (Linux) | Task detail | Open the task PR in the browser when a PR exists; otherwise the shortcut belongs to the fourth numbered dock item when present |
+| `Cmd/Ctrl+N` | Quick task search | Create a new branch TODO from the currently highlighted task |
+| `↑ / ↓ / Enter / Shift+Enter / Esc` | Quick task search | Move selection, open task, open task in a new window, close dialog |
+| `↑ / ↓ / Enter / Esc` | Project filter dropdown | Move selection, toggle project filter, close dropdown |
+| `↑ / ↓ / Enter / Esc` | Notifications dropdown | Move selection, open notification target, close dropdown |
+
+Task detail dock numbering excludes the back-to-board button and follows the visible dock item order. If a task has a PR URL, PR takes slot 4 and later dock items shift to 5+; without a PR, the next dock item uses slot 4.
 
 ### AI Agent Hooks - Automatic Status Tracking
 KanVibe integrates with **Claude Code Hooks**, **Gemini CLI Hooks**, **Codex CLI**, and **OpenCode** to automatically track task status. Tasks are managed through 5 statuses:
@@ -169,12 +240,20 @@ AfterAgent (agent done)    → REVIEW
 
 > Gemini CLI does not have an equivalent to Claude Code's `AskUserQuestion`, so the PENDING state is not available.
 
-#### Codex CLI (Partial Support)
+#### Codex CLI
 ```
-agent-turn-complete (agent done) → REVIEW
+UserPromptSubmit                → PROGRESS
+PermissionRequest (Bash only)  → PENDING
+PreToolUse (Bash only)         → PROGRESS
+Stop                           → REVIEW
 ```
 
-> Codex CLI currently only supports the `agent-turn-complete` notification event via the `notify` config. PROGRESS and PENDING transitions are not yet available. OpenAI is [actively designing a hooks system](https://github.com/openai/codex/discussions/2150) — full support will be added when it ships.
+KanVibe now uses Codex's current lifecycle hooks model with `.codex/hooks.json` plus both `[features].codex_hooks = true` and `[features].hooks = true` in `.codex/config.toml`:
+
+- https://developers.openai.com/codex/hooks
+- https://developers.openai.com/codex/config-reference
+
+> Codex's current `PermissionRequest` and `PreToolUse` matchers are Bash-scoped, so `PENDING` represents approval waits rather than every kind of conversational follow-up question.
 
 #### OpenCode
 ```
@@ -192,7 +271,7 @@ All agent hooks are **auto-installed** when you register a project through KanVi
 |-------|---------------|-------------|
 | Claude Code | `.claude/hooks/` | `.claude/settings.json` |
 | Gemini CLI | `.gemini/hooks/` | `.gemini/settings.json` |
-| Codex CLI | `.codex/hooks/` | `.codex/config.toml` |
+| Codex CLI | `.codex/hooks/` | `.codex/config.toml`, `.codex/hooks.json` |
 | OpenCode | `.opencode/plugins/` | Plugin auto-discovery |
 
 #### Browser Notifications
@@ -211,18 +290,11 @@ Setup: Browser will prompt for permission on first visit. Configure filters in *
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/hooks/start` | POST | Create a new task |
-| `/api/hooks/status` | POST | Update task status by `branchName` + `projectName` |
+| `/api/hooks/status` | POST | Update task status by `branchName` + `projectName`; if the target is missing, KanVibe still sends a browser notification and returns `404` without changing status |
 
 ### GitHub-style Diff View
 
 Review code changes directly in the browser with a GitHub-style diff viewer. Click the **Diff** badge on the task detail page to see all modified files compared to the base branch.
-
-<table>
-  <tr>
-    <td width="30%"><img src="./docs/images/diff-view-button.png" alt="Diff Badge on Task Detail" width="100%"></td>
-    <td width="70%"><img src="./docs/images/diff-view.png" alt="Diff View Page" width="100%"></td>
-  </tr>
-</table>
 
 - File tree sidebar with changed file count
 - Inline diff viewer powered by Monaco Editor
@@ -245,13 +317,13 @@ Review code changes directly in the browser with a GitHub-style diff viewer. Cli
 | Category | Technology |
 |----------|------------|
 | Frontend/Backend | Next.js 16 (App Router) + React 19 + TypeScript |
-| Database | PostgreSQL 16 + TypeORM |
+| Database | SQLite + TypeORM + better-sqlite3 |
 | Styling | Tailwind CSS v4 |
 | Terminal | xterm.js + WebSocket + node-pty |
-| SSH | ssh2 (Node.js) |
+| SSH | system ssh binary |
 | Drag & Drop | @hello-pangea/dnd |
 | i18n | next-intl |
-| Container | Docker Compose |
+| Desktop Packaging | Electron + Electron Builder |
 
 ---
 

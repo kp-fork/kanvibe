@@ -15,6 +15,7 @@ const mockServiceWorkerRegistration = {
 };
 
 const mockGetRegistration = vi.fn().mockResolvedValue(mockServiceWorkerRegistration);
+const mockDesktopShowNotification = vi.fn().mockResolvedValue(true);
 
 // Notification 글로벌 설정
 const mockRequestPermission = vi.fn().mockResolvedValue("granted");
@@ -40,6 +41,9 @@ describe("useTaskNotification", () => {
     mockShowNotification.mockClear();
     mockGetRegistration.mockClear();
     mockRequestPermission.mockClear();
+    mockDesktopShowNotification.mockClear();
+
+    delete window.kanvibeDesktop;
 
     // Notification permission 리셋
     Object.defineProperty(global, "Notification", {
@@ -86,7 +90,6 @@ describe("useTaskNotification", () => {
       "kanvibe — feat/login",
       {
         body: "로그인 구현: review로 변경\nOAuth 연동",
-        icon: "/kanvibe-logo.svg",
         data: { taskId: "task-123", locale: "ko" },
       }
     );
@@ -117,8 +120,7 @@ describe("useTaskNotification", () => {
     expect(mockShowNotification).toHaveBeenCalledWith(
       "kanvibe — feat/test",
       {
-        body: "테스트 작업: progress로 변경",
-        icon: "/kanvibe-logo.svg",
+        body: "테스트 작업: changed to progress",
         data: { taskId: "task-456", locale: "en" },
       }
     );
@@ -149,6 +151,54 @@ describe("useTaskNotification", () => {
     expect(mockShowNotification).not.toHaveBeenCalled();
   });
 
+  it("should show missing target notification when hook target is missing", async () => {
+    // Given
+    const { useTaskNotification } = await import("@/hooks/useTaskNotification");
+    const { result } = renderHook(() => useTaskNotification());
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // When
+    await act(async () => {
+      await result.current.notifyHookStatusTargetMissing({
+        taskId: "task-404",
+        requestedStatus: "review",
+        reason: "task-not-found",
+        locale: "ko",
+      });
+    });
+
+    // Then
+    expect(mockShowNotification).toHaveBeenCalledWith("Hook target missing — task-404", {
+      body: "review 상태로 변경하지 못했습니다.\n연결된 작업을 찾지 못했습니다.",
+      data: { locale: "ko" },
+    });
+  });
+
+  it("should localize missing target notification body with locale", async () => {
+    // Given
+    const { useTaskNotification } = await import("@/hooks/useTaskNotification");
+    const { result } = renderHook(() => useTaskNotification());
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // When
+    await act(async () => {
+      await result.current.notifyHookStatusTargetMissing({
+        taskId: "task-404",
+        requestedStatus: "review",
+        reason: "task-not-found",
+        locale: "en",
+      });
+    });
+
+    // Then
+    expect(mockShowNotification).toHaveBeenCalledWith("Hook target missing — task-404", {
+      body: "Failed to change status to review.\nNo matching task was found.",
+      data: { locale: "en" },
+    });
+  });
+
   it("should request permission when permission is default", async () => {
     // Given
     Object.defineProperty(global, "Notification", {
@@ -169,5 +219,39 @@ describe("useTaskNotification", () => {
 
     // Then
     expect(mockRequestPermission).toHaveBeenCalled();
+  });
+
+  it("should use Electron native notification bridge on desktop", async () => {
+    window.kanvibeDesktop = {
+      isDesktop: true,
+      showNotification: mockDesktopShowNotification,
+    };
+
+    const { useTaskNotification } = await import("@/hooks/useTaskNotification");
+    const { result } = renderHook(() => useTaskNotification());
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await act(async () => {
+      await result.current.notifyTaskStatusChanged({
+        projectName: "kanvibe",
+        branchName: "feat/electron",
+        taskTitle: "네이티브 알림",
+        description: "OS 알림 테스트",
+        newStatus: "review",
+        taskId: "task-desktop",
+        locale: "ko",
+      });
+    });
+
+    expect(mockDesktopShowNotification).toHaveBeenCalledWith({
+      title: "kanvibe — feat/electron",
+      body: "네이티브 알림: review로 변경\nOS 알림 테스트",
+      taskId: "task-desktop",
+      locale: "ko",
+      relativePath: "/ko/task/task-desktop",
+      dedupeKey: "task-status:task-desktop:review",
+    });
+    expect(mockShowNotification).not.toHaveBeenCalled();
   });
 });

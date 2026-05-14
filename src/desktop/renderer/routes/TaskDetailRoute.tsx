@@ -1,0 +1,1047 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  Chatting01Icon,
+  InformationCircleIcon,
+} from "@hugeicons/core-free-icons";
+import { useTranslations } from "next-intl";
+import { useParams } from "react-router-dom";
+import ConnectTerminalForm from "@/components/ConnectTerminalForm";
+import CreateTaskModal from "@/components/CreateTaskModal";
+import DeleteTaskButton from "@/components/DeleteTaskButton";
+import DoneStatusButton from "@/components/DoneStatusButton";
+import HooksStatusCard from "@/components/HooksStatusCard";
+import NotificationCenterButton, { type NotificationCenterButtonHandle } from "@/components/NotificationCenterButton";
+import TaskDetailInfoCard from "@/components/TaskDetailInfoCard";
+import TaskDetailTitleCard from "@/components/TaskDetailTitleCard";
+import { Link, useRouter } from "@/desktop/renderer/navigation";
+import { getDefaultSessionType, getDoneAlertDismissed, getSidebarDefaultCollapsed } from "@/desktop/renderer/actions/appSettings";
+import { getGitDiffFiles } from "@/desktop/renderer/actions/diff";
+import { deleteTask, getTaskById, getTaskIdByProjectAndBranch, updateTaskStatus } from "@/desktop/renderer/actions/kanban";
+import {
+  getTaskAiSessions,
+  getTaskAiSessionDetail,
+  getTaskCodexHooksStatus,
+  getTaskGeminiHooksStatus,
+  getTaskHooksStatus,
+  getTaskOpenCodeHooksStatus,
+  getAllProjects,
+} from "@/desktop/renderer/actions/project";
+import {
+  useBoardCommands,
+  useHasBoardShortcutBlocker,
+  type BranchTodoDefaults,
+} from "@/desktop/renderer/components/BoardCommandProvider";
+import TerminalLoader from "@/desktop/renderer/components/TerminalLoader";
+import { fetchPrUrlWithPrompt } from "@/desktop/renderer/utils/fetchPrUrlWithPrompt";
+import {
+  SHORTCUTS,
+  TASK_DETAIL_DOCK_SHORTCUT_INDEXES,
+  createTaskDetailDockShortcut,
+  formatShortcutForDisplay,
+  getCurrentShortcutPlatform,
+  matchShortcutEvent,
+  matchTaskDetailDockShortcutEvent,
+} from "@/desktop/renderer/utils/keyboardShortcut";
+import { INITIAL_DESKTOP_LOAD_TIMEOUT_MS, logDesktopInitialLoadTimeout } from "@/desktop/renderer/utils/loadingTimeout";
+import { rememberBoardFocusTask } from "@/desktop/renderer/utils/boardFocusTarget";
+import { buildRouteCacheKey, readRouteCache, removeRouteCache, writeRouteCache } from "@/desktop/renderer/utils/routeCache";
+import { useRefreshSignal } from "@/desktop/renderer/utils/refresh";
+import { requestActiveTerminalFocusAfterUiSettles } from "@/desktop/renderer/utils/terminalFocus";
+import { SessionType, TaskStatus } from "@/entities/KanbanTask";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import type {
+  AggregatedAiMessage,
+  AggregatedAiSession,
+  AggregatedAiSessionDetail,
+  AggregatedAiSessionsResult,
+} from "@/lib/aiSessions/types";
+
+const STATUS_TRANSITIONS = [
+  { status: TaskStatus.TODO, labelKey: "moveToTodo" },
+  { status: TaskStatus.PROGRESS, labelKey: "moveToProgress" },
+  { status: TaskStatus.REVIEW, labelKey: "moveToReview" },
+  { status: TaskStatus.DONE, labelKey: "moveToDone" },
+] as const;
+
+const INLINE_CHAT_DETAIL_LIMIT = 40;
+
+const AGENT_TAG_STYLES: Record<string, string> = {
+  claude: "bg-tag-claude-bg text-tag-claude-text",
+  gemini: "bg-tag-gemini-bg text-tag-gemini-text",
+  codex: "bg-tag-codex-bg text-tag-codex-text",
+};
+
+type DetailPanel = "overview" | "status";
+type MainView = "terminal" | "chat";
+type TaskDetailDockItem = {
+  id: string;
+  label: string;
+  isActive: boolean;
+  renderIcon: () => ReactNode;
+  onActivate: () => void;
+  href?: string;
+};
+
+const PR_DOCK_INSERT_INDEX = 3;
+
+function PullRequestIcon() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      data-testid="task-detail-pr-icon"
+    >
+      <circle cx="6" cy="18" r="3" />
+      <circle cx="18" cy="6" r="3" />
+      <path d="M6 15V6" />
+      <path d="M18 9v1.5A5.5 5.5 0 0 1 12.5 16H9" />
+      <path d="m12 13-3 3 3 3" />
+    </svg>
+  );
+}
+
+function AntennaSignalIcon({ testId }: { testId?: string }) {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      data-testid={testId}
+      data-icon-name="AntennaSignalIcon"
+    >
+      <path d="M12 19v-7" />
+      <path d="m9 22 3-3 3 3" />
+      <circle cx="12" cy="10" r="1.6" fill="currentColor" stroke="none" />
+      <path d="M8.7 13.1a5 5 0 0 1 0-6.2" />
+      <path d="M15.3 6.9a5 5 0 0 1 0 6.2" />
+      <path d="M5.8 15.8a9 9 0 0 1 0-11.6" />
+      <path d="M18.2 4.2a9 9 0 0 1 0 11.6" />
+    </svg>
+  );
+}
+
+interface TaskDetailState {
+  task: NonNullable<Awaited<ReturnType<typeof getTaskById>>>;
+  baseBranchTaskId: string | null;
+  diffFiles: Awaited<ReturnType<typeof getGitDiffFiles>>;
+  claudeHooksStatus: Awaited<ReturnType<typeof getTaskHooksStatus>>;
+  geminiHooksStatus: Awaited<ReturnType<typeof getTaskGeminiHooksStatus>>;
+  codexHooksStatus: Awaited<ReturnType<typeof getTaskCodexHooksStatus>>;
+  openCodeHooksStatus: Awaited<ReturnType<typeof getTaskOpenCodeHooksStatus>>;
+  aiSessions: Awaited<ReturnType<typeof getTaskAiSessions>>;
+  projects: Awaited<ReturnType<typeof getAllProjects>>;
+  sidebarDefaultCollapsed: boolean;
+  defaultSessionType: Awaited<ReturnType<typeof getDefaultSessionType>>;
+  doneAlertDismissed: boolean;
+}
+
+interface TaskDetailRouteCache extends TaskDetailState {
+  defaultPanelDismissed?: boolean;
+}
+
+interface NormalizedTaskDetailRouteCache {
+  state: TaskDetailState;
+  defaultPanelDismissed: boolean;
+}
+
+const EMPTY_AI_SESSIONS: Awaited<ReturnType<typeof getTaskAiSessions>> = {
+  isRemote: false,
+  targetPath: null,
+  repoPath: null,
+  sessions: [],
+  sources: [],
+};
+
+const DEFAULT_DETAIL_STATE: Omit<TaskDetailState, "task"> = {
+  baseBranchTaskId: null,
+  diffFiles: [],
+  claudeHooksStatus: null,
+  geminiHooksStatus: null,
+  codexHooksStatus: null,
+  openCodeHooksStatus: null,
+  aiSessions: EMPTY_AI_SESSIONS,
+  projects: [],
+  sidebarDefaultCollapsed: false,
+  defaultSessionType: SessionType.TMUX,
+  doneAlertDismissed: false,
+};
+
+function getBranchTodoDefaultsFromTask(task: TaskDetailState["task"] | null): BranchTodoDefaults | null {
+  if (!task?.projectId) {
+    return null;
+  }
+
+  return {
+    projectId: task.projectId,
+    baseBranch: task.branchName || task.baseBranch || "",
+  };
+}
+
+function getTaskDetailRouteCacheKey(taskId: string) {
+  return buildRouteCacheKey("task-detail", taskId);
+}
+
+function normalizeCachedTaskDetailRouteCache(cachedRoute: TaskDetailRouteCache | null): NormalizedTaskDetailRouteCache | null {
+  if (!cachedRoute) {
+    return null;
+  }
+
+  const routeState = { ...cachedRoute } as TaskDetailRouteCache & {
+    sidebarHintDismissed?: boolean;
+  };
+  const defaultPanelDismissed = routeState.defaultPanelDismissed === true;
+  delete routeState.sidebarHintDismissed;
+  delete routeState.defaultPanelDismissed;
+  return {
+    state: {
+      ...DEFAULT_DETAIL_STATE,
+      ...routeState,
+      sidebarDefaultCollapsed: routeState.sidebarDefaultCollapsed ?? DEFAULT_DETAIL_STATE.sidebarDefaultCollapsed,
+    },
+    defaultPanelDismissed,
+  };
+}
+
+function selectInlineChatSession(sessions: AggregatedAiSession[]) {
+  return sessions.find((session) => session.provider === "claude") ?? sessions[0] ?? null;
+}
+
+function InlineAiChatView({ taskId, data }: { taskId: string; data: AggregatedAiSessionsResult }) {
+  const t = useTranslations("taskDetail");
+  const selectedSession = useMemo(() => selectInlineChatSession(data.sessions), [data.sessions]);
+  const [detail, setDetail] = useState<AggregatedAiSessionDetail | null>(null);
+  const [detailError, setDetailError] = useState<{ sessionId: string; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      return;
+    }
+
+    let cancelled = false;
+
+    getTaskAiSessionDetail(
+      taskId,
+      selectedSession.provider,
+      selectedSession.id,
+      selectedSession.sourceRef ?? null,
+      null,
+      INLINE_CHAT_DETAIL_LIMIT,
+      false,
+    ).then((result) => {
+      if (cancelled) return;
+      if (!result) {
+        setDetailError({ sessionId: selectedSession.id, message: t("aiSessions.detailError") });
+        return;
+      }
+
+      setDetail(result);
+      setDetailError(null);
+    }).catch(() => {
+      if (cancelled) return;
+      setDetailError({ sessionId: selectedSession.id, message: t("aiSessions.detailError") });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSession, taskId, t]);
+
+  const messages = selectedSession && detail?.sessionId === selectedSession.id ? detail.messages : [];
+  const error = selectedSession && detailError?.sessionId === selectedSession.id ? detailError.message : null;
+  const isLoading = Boolean(selectedSession && detail?.sessionId !== selectedSession.id && !error);
+
+  return (
+    <div
+      data-testid="inline-ai-chat"
+      className="flex h-full min-h-0 flex-1 translate-y-0 flex-col overflow-hidden rounded-lg border border-border-default bg-bg-page opacity-100 shadow-md transition-all duration-200 ease-out"
+    >
+      <div className="flex shrink-0 items-center gap-3 border-b border-border-default bg-terminal-chrome px-4 py-2.5">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-semibold text-terminal-text">
+            {selectedSession?.title ?? t("aiSessions.title")}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] text-terminal-text/70">
+            {selectedSession ? selectedSession.provider : t("aiSessions.noPreview")}
+          </p>
+        </div>
+        {selectedSession ? (
+          <span className="rounded border border-tag-claude-text/30 bg-tag-claude-bg px-2 py-0.5 text-[10px] font-semibold text-tag-claude-text">
+            {selectedSession.provider}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        {!selectedSession ? <InlineAiChatEmpty text={data.isRemote ? t("aiSessions.remoteBadge") : t("aiSessions.noPreview")} /> : null}
+        {selectedSession && isLoading ? <InlineAiChatEmpty text={t("aiSessions.loadingDetail")} /> : null}
+        {selectedSession && !isLoading && error ? <InlineAiChatEmpty text={error} /> : null}
+        {selectedSession && !isLoading && !error && messages.length === 0 ? <InlineAiChatEmpty text={t("aiSessions.noPreview")} /> : null}
+        {!isLoading && !error && messages.map((message, index) => (
+          <InlineAiChatMessage key={`${message.role}-${message.timestamp ?? index}-${index}`} message={message} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InlineAiChatEmpty({ text }: { text: string }) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <p className="rounded-md border border-border-default bg-bg-surface px-4 py-3 text-sm text-text-muted">
+        {text}
+      </p>
+    </div>
+  );
+}
+
+function InlineAiChatMessage({ message }: { message: AggregatedAiMessage }) {
+  const isUserMessage = message.role === "user";
+  const displayedText = message.fullText || message.text;
+
+  return (
+    <div className={`flex ${isUserMessage ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[74%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${
+          isUserMessage
+            ? "rounded-br-md bg-brand-primary text-white"
+            : "rounded-bl-md border border-border-default bg-bg-surface text-text-primary"
+        }`}
+      >
+        <div className={`mb-1 text-[11px] font-semibold ${isUserMessage ? "text-white/75" : "text-text-muted"}`}>
+          {message.role}
+        </div>
+        <p className="whitespace-pre-wrap break-words">{displayedText}</p>
+      </div>
+    </div>
+  );
+}
+
+export default function TaskDetailRoute() {
+  const { id = "" } = useParams();
+  const router = useRouter();
+  const boardCommands = useBoardCommands();
+  const hasShortcutBlocker = useHasBoardShortcutBlocker();
+  const t = useTranslations("taskDetail");
+  const tc = useTranslations("common");
+  const refreshSignal = useRefreshSignal(["all", "task-detail"]);
+  const cachedRoute = useMemo(
+    () => (id ? normalizeCachedTaskDetailRouteCache(readRouteCache<TaskDetailRouteCache>(getTaskDetailRouteCacheKey(id))) : null),
+    [id],
+  );
+  const cachedState = cachedRoute?.state ?? null;
+  const [state, setState] = useState<TaskDetailState | null | undefined>(cachedState ?? undefined);
+  const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
+  const [createTaskDefaults, setCreateTaskDefaults] = useState<BranchTodoDefaults | null>(null);
+  const currentTaskRef = useRef<TaskDetailState["task"] | null>(cachedState?.task ?? null);
+  const needsMacDesktopHeaderOffset = useMemo(() => {
+    const isDesktopApp = window.kanvibeDesktop?.isDesktop === true;
+    const isMacDesktop = navigator.userAgent.includes("Mac") || navigator.platform.toLowerCase().includes("mac");
+    return isDesktopApp && isMacDesktop;
+  }, []);
+  const [defaultPanelDismissed, setDefaultPanelDismissed] = useState(cachedRoute?.defaultPanelDismissed ?? false);
+  const [resolvedSidebarDefaultCollapsed, setResolvedSidebarDefaultCollapsed] = useState<boolean | null>(null);
+  const [activePanel, setActivePanel] = useState<DetailPanel | null>(null);
+  const [mainView, setMainView] = useState<MainView>("terminal");
+  const notificationCenterRef = useRef<NotificationCenterButtonHandle>(null);
+  const currentTaskIdRef = useRef(id);
+  const commonTranslationsRef = useRef(tc);
+  const hasTerminal = !!(state?.task.sessionType && state.task.sessionName);
+  const shortcutPlatform = getCurrentShortcutPlatform();
+  const statusPanelLabel = `${t("actions")} · ${t("hooksStatus")}`;
+  currentTaskRef.current = state?.task ?? null;
+  const shouldShowDefaultOverviewPanel = !!state
+    && state !== null
+    && resolvedSidebarDefaultCollapsed === false
+    && !defaultPanelDismissed;
+  const visiblePanel = activePanel ?? (shouldShowDefaultOverviewPanel ? "overview" : null);
+
+  const markDefaultPanelDismissed = useCallback(() => {
+    setDefaultPanelDismissed(true);
+  }, []);
+
+  const closeDetailPanel = useCallback(() => {
+    markDefaultPanelDismissed();
+    setActivePanel(null);
+    requestActiveTerminalFocusAfterUiSettles();
+  }, [markDefaultPanelDismissed]);
+
+  const toggleDetailPanel = useCallback((panel: DetailPanel) => {
+    markDefaultPanelDismissed();
+    setActivePanel(visiblePanel === panel ? null : panel);
+  }, [markDefaultPanelDismissed, visiblePanel]);
+
+  const toggleChatView = useCallback(() => {
+    setMainView((current) => {
+      const nextView = current === "chat" ? "terminal" : "chat";
+      if (nextView === "chat") {
+        markDefaultPanelDismissed();
+        setActivePanel(null);
+      } else {
+        requestActiveTerminalFocusAfterUiSettles();
+      }
+      return nextView;
+    });
+  }, [markDefaultPanelDismissed]);
+
+  const dockItems = useMemo<TaskDetailDockItem[]>(() => {
+    if (!state) {
+      return [];
+    }
+
+    const items: TaskDetailDockItem[] = [
+      {
+        id: "overview",
+        label: t("info"),
+        isActive: visiblePanel === "overview",
+        renderIcon: () => (
+          <HugeiconsIcon
+            icon={InformationCircleIcon}
+            size={17}
+            strokeWidth={1.6}
+            aria-hidden="true"
+          />
+        ),
+        onActivate: () => toggleDetailPanel("overview"),
+      },
+      {
+        id: "status",
+        label: statusPanelLabel,
+        isActive: visiblePanel === "status",
+        renderIcon: () => <AntennaSignalIcon testId="task-status-panel-icon" />,
+        onActivate: () => toggleDetailPanel("status"),
+      },
+      {
+        id: "chat",
+        label: t("aiSessions.inlineChat"),
+        isActive: mainView === "chat",
+        renderIcon: () => (
+          <HugeiconsIcon
+            icon={Chatting01Icon}
+            size={17}
+            strokeWidth={1.6}
+            aria-hidden="true"
+          />
+        ),
+        onActivate: toggleChatView,
+      },
+    ];
+
+    if (state.task.prUrl) {
+      items.splice(PR_DOCK_INSERT_INDEX, 0, {
+        id: "pull-request",
+        label: "PR",
+        isActive: false,
+        renderIcon: () => <PullRequestIcon />,
+        onActivate: () => {
+          window.open(state.task.prUrl!, "_blank", "noopener,noreferrer");
+        },
+        href: state.task.prUrl,
+      });
+    }
+
+    return items;
+  }, [mainView, state, statusPanelLabel, t, toggleChatView, toggleDetailPanel, visiblePanel]);
+
+  const activateDockItem = useCallback((shortcutIndex: number) => {
+    if (!Number.isInteger(shortcutIndex)) {
+      return false;
+    }
+
+    const item = dockItems[shortcutIndex - 1];
+    if (!item) {
+      return false;
+    }
+
+    item.onActivate();
+    return true;
+  }, [dockItems]);
+
+  useEffect(() => {
+    if (id) {
+      rememberBoardFocusTask(id);
+    }
+  }, [id]);
+
+  useEffect(() => boardCommands.registerNotificationCenterHandler(() => {
+    notificationCenterRef.current?.toggle();
+  }), [boardCommands]);
+
+  useEffect(() => boardCommands.registerBoardHandlers({
+    toggleNotificationCenter() {
+      notificationCenterRef.current?.toggle();
+    },
+    openProjectFilter() {},
+    openCreateTaskModal(defaults) {
+      setCreateTaskDefaults(defaults ?? getBranchTodoDefaultsFromTask(currentTaskRef.current));
+      setIsCreateTaskModalOpen(true);
+    },
+  }), [boardCommands]);
+
+  useEffect(() => {
+    commonTranslationsRef.current = tc;
+  }, [tc]);
+
+  useEffect(() => {
+    function consumeHistoryShortcut(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+
+    function handlePriorityHistoryShortcut(event: KeyboardEvent) {
+      if (matchShortcutEvent(event, SHORTCUTS.pageBack, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
+        consumeHistoryShortcut(event);
+        router.back();
+        return;
+      }
+
+      if (matchShortcutEvent(event, SHORTCUTS.pageForward, shortcutPlatform)) {
+        if (hasShortcutBlocker) {
+          consumeHistoryShortcut(event);
+          return;
+        }
+
+        consumeHistoryShortcut(event);
+        router.forward();
+      }
+    }
+
+    window.addEventListener("keydown", handlePriorityHistoryShortcut, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handlePriorityHistoryShortcut, { capture: true });
+    };
+  }, [hasShortcutBlocker, router, shortcutPlatform]);
+
+  useEffect(() => {
+    function consumeDockShortcut(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+
+    function handlePriorityDockShortcut(event: KeyboardEvent) {
+      const shortcutIndex = matchTaskDetailDockShortcutEvent(event, shortcutPlatform);
+      if (shortcutIndex === null) {
+        return;
+      }
+
+      if (hasShortcutBlocker) {
+        consumeDockShortcut(event);
+        return;
+      }
+
+      const handled = activateDockItem(shortcutIndex);
+      if (!handled) {
+        return;
+      }
+
+      consumeDockShortcut(event);
+    }
+
+    window.addEventListener("keydown", handlePriorityDockShortcut, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handlePriorityDockShortcut, { capture: true });
+    };
+  }, [activateDockItem, hasShortcutBlocker, shortcutPlatform]);
+
+  useEffect(() => (
+    window.kanvibeDesktop?.onTaskDetailDockShortcut?.((shortcutIndex: number) => {
+      if (hasShortcutBlocker) {
+        return;
+      }
+
+      activateDockItem(shortcutIndex);
+    }) ?? undefined
+  ), [activateDockItem, hasShortcutBlocker]);
+
+  useEffect(() => {
+    if (currentTaskIdRef.current === id) {
+      return;
+    }
+
+    currentTaskIdRef.current = id;
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setState(cachedState ?? undefined);
+      const nextDefaultPanelDismissed = cachedRoute?.defaultPanelDismissed ?? false;
+      setDefaultPanelDismissed(nextDefaultPanelDismissed);
+      setResolvedSidebarDefaultCollapsed(null);
+      setActivePanel(null);
+      setMainView("terminal");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cachedRoute, cachedState, id]);
+
+  useEffect(() => {
+    if (!state || state === null) {
+      return;
+    }
+
+    document.title = [state.task.branchName, state.task.project?.name].filter(Boolean).join(" - ");
+  }, [state]);
+
+  useEffect(() => {
+    if (!hasTerminal || isCreateTaskModalOpen || mainView !== "terminal") {
+      return;
+    }
+
+    requestActiveTerminalFocusAfterUiSettles();
+  }, [hasTerminal, id, isCreateTaskModalOpen, mainView]);
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    const cacheKey = getTaskDetailRouteCacheKey(id);
+    if (state === null) {
+      removeRouteCache(cacheKey);
+      return;
+    }
+
+    if (state !== undefined) {
+      writeRouteCache<TaskDetailRouteCache>(cacheKey, {
+        ...state,
+        defaultPanelDismissed,
+      });
+    }
+  }, [defaultPanelDismissed, id, state]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let loadingTimeout: number | null = window.setTimeout(() => {
+      loadingTimeout = null;
+      if (!cancelled) {
+        logDesktopInitialLoadTimeout("task-detail", { taskId: id });
+        setState((current) => current === undefined ? null : current);
+      }
+    }, INITIAL_DESKTOP_LOAD_TIMEOUT_MS);
+
+    const clearLoadingTimeout = () => {
+      if (loadingTimeout === null) {
+        return;
+      }
+
+      window.clearTimeout(loadingTimeout);
+      loadingTimeout = null;
+    };
+
+    (async () => {
+      try {
+        const [task, sidebarDefaultCollapsed] = await Promise.all([
+          getTaskById(id),
+          getSidebarDefaultCollapsed().catch(() => DEFAULT_DETAIL_STATE.sidebarDefaultCollapsed),
+        ]);
+        clearLoadingTimeout();
+
+        if (!task) {
+          if (!cancelled) {
+            setState(null);
+          }
+          return;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setResolvedSidebarDefaultCollapsed(sidebarDefaultCollapsed);
+        setState((current) => current && current.task.id === task.id
+          ? {
+              ...current,
+              sidebarDefaultCollapsed,
+              task: {
+                ...current.task,
+                ...task,
+              },
+            }
+          : {
+              task,
+              ...DEFAULT_DETAIL_STATE,
+              sidebarDefaultCollapsed,
+            });
+
+        if (task.branchName && !task.prUrl) {
+          void (async () => {
+            try {
+              const prUrl = await fetchPrUrlWithPrompt(task, commonTranslationsRef.current);
+              if (!prUrl || cancelled) {
+                return;
+              }
+
+              setState((current) => current && current.task.id === task.id
+                ? {
+                    ...current,
+                    task: {
+                      ...current.task,
+                      prUrl,
+                    },
+                  }
+                : current);
+            } catch (error) {
+              console.error("PR URL 자동 조회 실패:", error);
+            }
+          })();
+        }
+
+        const applySupplementalState = (updates: Partial<Omit<TaskDetailState, "task">>) => {
+          if (cancelled) {
+            return;
+          }
+
+          setState((current) => current && current.task.id === task.id
+            ? {
+                ...current,
+                ...updates,
+              }
+            : current);
+        };
+
+        void (async () => {
+          try {
+            const baseBranchName = task.baseBranch ?? "main";
+            const [foundTaskId, diffFiles, projects, defaultSessionType, doneAlertDismissed] = await Promise.all([
+              task.projectId ? getTaskIdByProjectAndBranch(task.projectId, baseBranchName) : Promise.resolve(null),
+              task.branchName && task.worktreePath ? getGitDiffFiles(id) : Promise.resolve([]),
+              getAllProjects(),
+              getDefaultSessionType(),
+              getDoneAlertDismissed(),
+            ]);
+            const baseBranchTaskId = foundTaskId !== task.id ? foundTaskId : null;
+
+            applySupplementalState({
+              baseBranchTaskId,
+              diffFiles,
+              projects,
+              defaultSessionType,
+              doneAlertDismissed,
+            });
+          } catch (error) {
+            console.error("Failed to load task detail reference data:", error);
+          }
+        })();
+
+        void (async () => {
+          try {
+            const [claudeHooksStatus, geminiHooksStatus, codexHooksStatus, openCodeHooksStatus] = await Promise.all([
+              task.projectId ? getTaskHooksStatus(id) : Promise.resolve(null),
+              task.projectId ? getTaskGeminiHooksStatus(id) : Promise.resolve(null),
+              task.projectId ? getTaskCodexHooksStatus(id) : Promise.resolve(null),
+              task.projectId ? getTaskOpenCodeHooksStatus(id) : Promise.resolve(null),
+            ]);
+
+            applySupplementalState({
+              claudeHooksStatus,
+              geminiHooksStatus,
+              codexHooksStatus,
+              openCodeHooksStatus,
+            });
+          } catch (error) {
+            console.error("Failed to load task hook statuses:", error);
+          }
+        })();
+
+        void (async () => {
+          try {
+            const aiSessions = task.projectId ? await getTaskAiSessions(id) : EMPTY_AI_SESSIONS;
+            applySupplementalState({ aiSessions });
+          } catch (error) {
+            console.error("Failed to load task AI sessions:", error);
+          }
+        })();
+      } catch (error) {
+        clearLoadingTimeout();
+        console.error("Failed to load task detail:", error);
+        if (!cancelled) {
+          setState((current) => current === undefined ? null : current);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearLoadingTimeout();
+    };
+  }, [id, refreshSignal]);
+
+  const agentTagStyle = useMemo(
+    () => (state?.task.agentType ? AGENT_TAG_STYLES[state.task.agentType] ?? "bg-tag-neutral-bg text-tag-neutral-text" : null),
+    [state?.task.agentType],
+  );
+
+  useEscapeKey(() => {
+    closeDetailPanel();
+  }, { enabled: visiblePanel !== null });
+
+  if (state === undefined) {
+    return <div className="min-h-screen flex items-center justify-center bg-bg-page text-text-muted">Loading...</div>;
+  }
+
+  if (state === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-page px-4">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <p className="text-text-muted">{t("taskNotFound")}</p>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="rounded-md border border-border-default bg-bg-surface px-4 py-2 text-sm text-text-secondary transition-colors hover:border-brand-primary hover:text-text-primary"
+          >
+            {t("goBack")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  async function handleStatusChange(formData: FormData) {
+    const newStatus = formData.get("status") as TaskStatus;
+    const updatedTask = await updateTaskStatus(id, newStatus);
+    if (newStatus === TaskStatus.DONE) {
+      router.push("/");
+      return;
+    }
+
+    if (updatedTask) {
+      setState((current) => current
+        ? {
+            ...current,
+            task: {
+              ...current.task,
+              ...updatedTask,
+            },
+          }
+        : current);
+    }
+  }
+
+  async function handleDelete() {
+    await deleteTask(id);
+    router.push("/");
+  }
+
+  function closeCreateTaskModal() {
+    setIsCreateTaskModalOpen(false);
+    setCreateTaskDefaults(null);
+    requestActiveTerminalFocusAfterUiSettles();
+  }
+
+  return (
+    <div className="relative h-screen overflow-hidden bg-bg-page p-3">
+      <aside className={`absolute bottom-3 left-3 top-3 z-40 flex w-12 flex-col items-center rounded-lg border border-border-default bg-bg-surface/95 p-1.5 shadow-sm ${needsMacDesktopHeaderOffset ? "pt-10" : ""}`}>
+        <Link href="/" className="mb-2 rounded-md p-2 text-text-muted transition-colors hover:bg-bg-page hover:text-text-primary" title={t("backToBoard")}>
+          <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
+
+        {dockItems.map((item, itemIndex) => {
+          const shortcutIndex = TASK_DETAIL_DOCK_SHORTCUT_INDEXES[itemIndex];
+          const shortcutText = shortcutIndex
+            ? formatShortcutForDisplay(createTaskDetailDockShortcut(shortcutIndex), shortcutPlatform)
+            : null;
+          const title = shortcutText ? `${item.label} (${shortcutText})` : item.label;
+
+          if (item.href) {
+            return (
+              <a
+                key={item.id}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-1 flex h-8 w-8 items-center justify-center rounded-md border border-tag-pr-text/30 bg-tag-pr-bg text-tag-pr-text transition-opacity hover:opacity-80"
+                title={title}
+                aria-label={item.label}
+              >
+                {item.renderIcon()}
+              </a>
+            );
+          }
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={item.onActivate}
+              className={`mb-1 rounded-md p-2 transition-colors ${
+                item.isActive
+                  ? "bg-brand-subtle text-text-brand"
+                  : "text-text-muted hover:bg-bg-page hover:text-text-primary"
+              }`}
+              title={title}
+              aria-label={item.label}
+            >
+              {item.renderIcon()}
+            </button>
+          );
+        })}
+
+        <div className="mt-auto" />
+      </aside>
+
+      {visiblePanel ? (
+        <section
+          className={`absolute bottom-3 left-[4.5rem] top-3 z-30 w-[360px] max-w-[calc(100vw-5.5rem)] overflow-y-auto rounded-lg border border-border-default bg-bg-surface/95 p-3 shadow-lg ${needsMacDesktopHeaderOffset ? "pt-10" : ""}`}
+        >
+          <div className="mb-3 flex items-center justify-between border-b border-border-subtle pb-2">
+            <h2 className="text-xs font-semibold uppercase text-text-muted">
+              {visiblePanel === "overview" && t("info")}
+              {visiblePanel === "status" && statusPanelLabel}
+            </h2>
+            <button
+              type="button"
+              onClick={closeDetailPanel}
+              className="rounded-md p-1 text-text-muted transition-colors hover:bg-bg-page hover:text-text-primary"
+              aria-label={tc("close")}
+            >
+              ×
+            </button>
+          </div>
+
+          {visiblePanel === "overview" ? (
+            <div className="space-y-3">
+              <TaskDetailTitleCard task={state.task} taskId={state.task.id} />
+              <TaskDetailInfoCard
+                task={state.task}
+                agentTagStyle={agentTagStyle}
+                baseBranchTaskId={state.baseBranchTaskId}
+                diffFileCount={state.diffFiles.length}
+              />
+            </div>
+          ) : null}
+
+          {visiblePanel === "status" ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border-default bg-bg-surface p-4">
+                <div className="flex flex-wrap gap-2">
+                  {STATUS_TRANSITIONS.filter((transition) => transition.status !== state.task.status).map((transition) => (
+                    transition.status === TaskStatus.DONE ? (
+                      <DoneStatusButton
+                        key={transition.status}
+                        statusChangeAction={handleStatusChange}
+                        label={t(transition.labelKey)}
+                        hasCleanableResources={!!(state.task.branchName || state.task.sessionType)}
+                        doneAlertDismissed={state.doneAlertDismissed}
+                      />
+                    ) : (
+                      <form key={transition.status} action={handleStatusChange}>
+                        <input type="hidden" name="status" value={transition.status} />
+                        <button type="submit" className="rounded-md border border-border-default bg-bg-page px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-brand-primary hover:text-text-brand">
+                          {t(transition.labelKey)}
+                        </button>
+                      </form>
+                    )
+                  ))}
+                </div>
+                <div className="mt-3 border-t border-border-subtle pt-3">
+                  <DeleteTaskButton deleteAction={handleDelete} />
+                </div>
+              </div>
+              <HooksStatusCard
+                taskId={state.task.id}
+                initialClaudeStatus={state.claudeHooksStatus}
+                initialGeminiStatus={state.geminiHooksStatus}
+                initialCodexStatus={state.codexHooksStatus}
+                initialOpenCodeStatus={state.openCodeHooksStatus}
+                isRemote={!!state.task.sshHost}
+                onStatusesChange={(updates) => {
+                  setState((current) => current
+                    ? {
+                        ...current,
+                        claudeHooksStatus: updates.claudeStatus !== undefined ? updates.claudeStatus : current.claudeHooksStatus,
+                        geminiHooksStatus: updates.geminiStatus !== undefined ? updates.geminiStatus : current.geminiHooksStatus,
+                        codexHooksStatus: updates.codexStatus !== undefined ? updates.codexStatus : current.codexHooksStatus,
+                        openCodeHooksStatus: updates.openCodeStatus !== undefined ? updates.openCodeStatus : current.openCodeHooksStatus,
+                      }
+                    : current);
+                }}
+              />
+            </div>
+          ) : null}
+
+        </section>
+      ) : null}
+
+      <main className="ml-14 flex h-full min-w-0 flex-col">
+        {mainView === "chat" ? (
+          <InlineAiChatView taskId={state.task.id} data={state.aiSessions} />
+        ) : hasTerminal ? (
+          <div className="flex-1 flex flex-col min-h-0 rounded-lg overflow-hidden shadow-md transition-all duration-200 ease-out">
+            <div className="bg-terminal-chrome flex items-center gap-2 px-4 py-2.5 shrink-0">
+              <span className="text-xs text-terminal-text font-mono truncate">{state.task.sessionName ?? t("terminal")}</span>
+              <div className="ml-auto">
+                <NotificationCenterButton ref={notificationCenterRef} buttonClassName="text-terminal-text hover:text-white hover:bg-white/10" panelClassName="mt-3" />
+              </div>
+            </div>
+            <div
+              className="flex-1 min-h-0 bg-terminal-bg"
+              onClick={() => {
+                if (visiblePanel !== null) {
+                  closeDetailPanel();
+                }
+              }}
+            >
+              <TerminalLoader taskId={state.task.id} />
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center border border-dashed border-border-default rounded-lg bg-bg-surface">
+            {state.task.projectId ? (
+              <ConnectTerminalForm
+                taskId={state.task.id}
+                sshHost={state.task.sshHost}
+                onConnected={(connectedTask) => {
+                  setState((current) => current && current.task.id === connectedTask.id
+                    ? {
+                        ...current,
+                        task: {
+                          ...current.task,
+                          ...connectedTask,
+                        },
+                      }
+                    : current);
+                }}
+              />
+            ) : <p className="text-text-muted text-sm">{t("noTerminal")}</p>}
+          </div>
+        )}
+      </main>
+
+      <CreateTaskModal
+        isOpen={isCreateTaskModalOpen}
+        onClose={closeCreateTaskModal}
+        sshHosts={[]}
+        projects={state.projects}
+        defaultProjectId={createTaskDefaults?.projectId ?? state.task.projectId ?? ""}
+        defaultBaseBranch={createTaskDefaults?.baseBranch}
+        defaultSessionType={state.defaultSessionType}
+      />
+    </div>
+  );
+}

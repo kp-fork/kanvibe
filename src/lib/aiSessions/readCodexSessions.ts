@@ -1,0 +1,201 @@
+import path from "path";
+import {
+  createReaderResult,
+  createSessionDetail,
+  determineMatchScope,
+  extractPlainText,
+  getCachedOrParse,
+  mapWithConcurrency,
+  makePreviewMessage,
+  paginateItems,
+  readJsonLines,
+  REMOTE_SESSION_FILE_PARSE_CONCURRENCY,
+  sortMessagesDescending,
+  toIsoString,
+  truncateText,
+} from "@/lib/aiSessions/shared";
+import { getHomeDirectory, listFilesRecursivelyBySuffix, pathExists } from "@/lib/hostFileAccess";
+import type { AggregatedAiMessage, AggregatedAiSession, AiSessionDetailReaderResult, AiSessionReaderContext, AiSessionReaderResult } from "@/lib/aiSessions/types";
+
+const DEFAULT_DETAIL_LIMIT = 20;
+
+interface CodexRolloutEvent {
+  type?: string;
+  timestamp?: string;
+  payload?: Record<string, unknown>;
+}
+
+export async function readCodexSessions(context: AiSessionReaderContext): Promise<AiSessionReaderResult> {
+  const codexSessionsDirectory = await getCodexSessionsDirectory(context);
+  const sessionsDirExists = await pathExists(codexSessionsDirectory, context.sshHost);
+  if (!sessionsDirExists) {
+    return createReaderResult("codex", { available: false, reason: "Codex sessions directory not found" });
+  }
+
+  const rolloutFiles = await listFilesRecursivelyBySuffix(codexSessionsDirectory, ".jsonl", context.sshHost);
+  const parseConcurrency = context.sshHost ? REMOTE_SESSION_FILE_PARSE_CONCURRENCY : rolloutFiles.length || 1;
+
+  const results = await mapWithConcurrency(
+    rolloutFiles,
+    parseConcurrency,
+    (filePath) => parseCodexSessionSummary(filePath, context),
+  );
+  let sessions = results.filter((s): s is AggregatedAiSession => s !== null);
+
+  if (context.query) {
+    const q = context.query.toLowerCase();
+    sessions = sessions.filter((s) =>
+      s.title?.toLowerCase().includes(q) ||
+      s.firstUserPrompt?.toLowerCase().includes(q) ||
+      s.matchedPath?.toLowerCase().includes(q)
+    );
+  }
+
+  return createReaderResult("codex", {
+    sessions,
+    reason: sessions.length === 0 ? "No Codex sessions matched this task" : null,
+  });
+}
+
+export async function readCodexSessionDetail(
+  context: AiSessionReaderContext,
+  sessionId: string,
+  sourceRef?: string | null,
+  cursor?: string | null,
+  limit = DEFAULT_DETAIL_LIMIT
+): Promise<AiSessionDetailReaderResult | null> {
+  const rolloutFiles = sourceRef
+    ? [sourceRef]
+    : await listFilesRecursivelyBySuffix(await getCodexSessionsDirectory(context), ".jsonl", context.sshHost);
+
+  for (const filePath of rolloutFiles) {
+    const detail = await parseCodexSessionDetail(filePath, context, sessionId, cursor, limit);
+    if (detail) return detail;
+  }
+
+  return null;
+}
+
+async function parseCodexSessionSummary(filePath: string, context: AiSessionReaderContext): Promise<AggregatedAiSession | null> {
+  const events = await getCachedOrParse(filePath, () => readJsonLines(filePath, context.sshHost), context.sshHost);
+
+  let sessionId: string | null = null;
+  let matchedPath: string | null = null;
+  let matchScope: AggregatedAiSession["matchScope"] | null = null;
+  let startedAt: string | null = null;
+  let updatedAt: string | null = null;
+  let firstUserPrompt: string | null = null;
+  let messageCount = 0;
+
+  for (const rawEvent of events) {
+    const event = rawEvent as CodexRolloutEvent;
+    if (event.type === "session_meta") {
+      const payload = event.payload ?? {};
+      const cwd = typeof payload.cwd === "string" ? payload.cwd : null;
+      const resolvedMatchScope = determineMatchScope(cwd, context);
+      if (!resolvedMatchScope) return null;
+
+      sessionId = typeof payload.id === "string" ? payload.id : path.basename(filePath, ".jsonl");
+      matchedPath = cwd;
+      matchScope = resolvedMatchScope;
+      startedAt = toIsoString(payload.timestamp ?? event.timestamp);
+      updatedAt = toIsoString(payload.timestamp ?? event.timestamp);
+      continue;
+    }
+
+    if (event.type !== "response_item") continue;
+    const payload = event.payload ?? {};
+    if (payload.type !== "message") continue;
+
+    const text = extractPlainText(payload.content);
+    if (!text) continue;
+
+    if (payload.role === "user" && !firstUserPrompt) {
+      firstUserPrompt = text;
+    }
+
+    messageCount += 1;
+    updatedAt = toIsoString(event.timestamp) ?? updatedAt;
+  }
+
+  if (!sessionId || !matchedPath || !matchScope) return null;
+
+  return {
+    id: sessionId,
+    provider: "codex",
+    startedAt,
+    updatedAt,
+    matchedPath,
+    matchScope,
+    title: firstUserPrompt ? truncateText(firstUserPrompt, 80) : null,
+    firstUserPrompt: firstUserPrompt ? truncateText(firstUserPrompt) : null,
+    messageCount,
+    sourceRef: filePath,
+  };
+}
+
+async function parseCodexSessionDetail(
+  filePath: string,
+  context: AiSessionReaderContext,
+  sessionId: string,
+  cursor?: string | null,
+  limit = DEFAULT_DETAIL_LIMIT
+): Promise<AiSessionDetailReaderResult | null> {
+  const events = await getCachedOrParse(filePath, () => readJsonLines(filePath, context.sshHost), context.sshHost);
+  let matchedPath: string | null = null;
+  let title: string | null = null;
+  const messages: AggregatedAiMessage[] = [];
+
+  for (const rawEvent of events) {
+    const event = rawEvent as CodexRolloutEvent;
+    if (event.type === "session_meta") {
+      const payload = event.payload ?? {};
+      const candidateSessionId = typeof payload.id === "string" ? payload.id : path.basename(filePath, ".jsonl");
+      if (candidateSessionId !== sessionId) return null;
+
+      const cwd = typeof payload.cwd === "string" ? payload.cwd : null;
+      if (!determineMatchScope(cwd, context)) return null;
+      matchedPath = cwd;
+      continue;
+    }
+
+    if (event.type !== "response_item") continue;
+    const payload = event.payload ?? {};
+    if (payload.type !== "message") continue;
+
+    const role = payload.role === "user" || payload.role === "assistant" ? payload.role : "unknown";
+    if (context.roles && context.roles.length > 0 && !context.roles.includes(role)) {
+      continue;
+    }
+
+    const text = extractPlainText(payload.content);
+    if (!text) continue;
+
+    if (context.query && !text.toLowerCase().includes(context.query.toLowerCase())) {
+      continue;
+    }
+
+    if (role === "user" && !title) {
+      title = truncateText(text, 80);
+    }
+
+    const previewMessage = makePreviewMessage(role, event.timestamp, text);
+    if (previewMessage) messages.push(previewMessage);
+  }
+
+  if (!matchedPath) return null;
+  const paginated = paginateItems(sortMessagesDescending(messages), cursor, limit);
+  return createSessionDetail({
+    sessionId,
+    provider: "codex",
+    title,
+    matchedPath,
+    sourceRef: filePath,
+    messages: paginated.items,
+    nextCursor: paginated.nextCursor,
+  });
+}
+
+async function getCodexSessionsDirectory(context: AiSessionReaderContext): Promise<string> {
+  return path.join(await getHomeDirectory(context.sshHost), ".codex", "sessions");
+}

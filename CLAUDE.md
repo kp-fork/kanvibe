@@ -1,157 +1,54 @@
-# KanVibe
+# KanVibe Agent Conventions
 
-AI 에이전트 작업 관리 Kanban 보드.
+## Runtime Environment Safety
 
-## Tech Stack
+- Avoid writing code that mutates generic process or server environment variables, because Electron main, hook servers, shells, tmux, zellij, and spawned child processes can inherit those values.
+- Do not set generic environment variables such as `PORT`, `NODE_ENV`, `HOST`, `PATH`, `HOME`, or similar process-wide defaults to express KanVibe runtime state.
+- Treat `PORT`, `HOST`, `NODE_ENV`, `PATH`, `HOME`, and `KANVIBE_*` as examples, not the full boundary. Do not introduce behavior that can affect the overall process-wide, user-wide, shell-wide, tmux-wide, zellij-wide, or agent-wide environment.
+- Avoid global environment side effects such as mutating `process.env` for runtime wiring, writing shell startup files, exporting variables into interactive sessions, changing global package-manager or OS environment config, or forwarding server/runtime environments wholesale.
+- Prefer explicit function arguments, typed configuration objects, or module-local state for runtime wiring such as server ports, hosts, feature flags, and mode selection.
+- If an environment variable is truly required, use a KanVibe-scoped name such as `KANVIBE_*`, document why it must be process-wide, and keep it out of user shell environments unless shell inheritance is the intended behavior.
+- When constructing child process, PTY, shell, tmux, or zellij environments, start from the narrowest required environment and avoid blindly leaking server-only runtime values into interactive sessions.
+- Route local child process and terminal environment creation through `createLocalShellEnvironment()` so `PORT`, `HOST`, `NODE_ENV`, and KanVibe internal `KANVIBE_*` values are stripped before user-visible shells run.
+- When changing terminal or child process environment handling, add focused tests that assert server/runtime variables do not appear in task terminal environments.
 
-- Next.js 16 (App Router) + React 19 + TypeScript
-- Tailwind CSS v4 (CSS Variables + @theme inline)
-- next-intl (i18n)
-- TypeORM + PostgreSQL
-- @hello-pangea/dnd (drag & drop)
+## App-Wide UI Settings
 
-## Design System
+- Store app-wide UI preferences in the app settings layer (`appSettingsService` / `AppSettings`), not in route-specific state or route cache.
+- Treat `AppSettings` as the source of truth for preferences that must survive app restarts, such as "don't show again" dismissals.
+- Use route state and route cache only for route-local render data. Do not persist global UI preferences in route cache.
+- If an old route cache contains a former global preference field, strip or ignore that field when reading the cache.
+- Avoid `sessionStorage` or `localStorage` for app-wide preferences unless the requested behavior is explicitly browser-session scoped.
 
-디자인 토큰은 `prd/design-system.json`에 정의되고 `src/app/globals.css`에 CSS 변수로 선언된다.
+### Sidebar Hint Dismissal
 
-### 토큰 사용법
+- The sidebar fold hint dismissal is app-wide.
+- The dismissal should be written through `dismissSidebarHint()` and persisted as `sidebar_hint_dismissed` in `AppSettings`.
+- `TaskDetailRoute` may keep a local React state copy for rendering, but it must not write `sidebarHintDismissed` into task-detail route cache.
 
-Tailwind 클래스에서 CSS 변수 토큰을 직접 사용한다:
+## Shortcut Handling
 
-- 배경: `bg-bg-page`, `bg-bg-surface`, `bg-brand-primary`
-- 텍스트: `text-text-primary`, `text-text-secondary`, `text-text-muted`
-- 보더: `border-border-default`, `border-border-strong`
-- 상태: `bg-status-todo`, `bg-status-progress`, `bg-status-review`, `bg-status-done`
-- 태그: `bg-tag-claude-bg text-tag-claude-text`, `bg-tag-branch-bg text-tag-branch-text`
-- 그림자: `shadow-sm`, `shadow-md`, `shadow-lg`
+- Define shortcut commands in shared shortcut utilities with semantic command names, then consume those definitions from renderer components and Electron main handlers.
+- Keep shortcut formatting, capture, browser-event matching, and Electron `before-input-event` matching behind the shared shortcut interface.
+- Express cross-platform shortcuts with the `Mod` modifier. `Mod` means `Command` on macOS and `Control` on Linux or other non-macOS platforms.
+- Resolve the active shortcut platform through the shared platform helper instead of checking `navigator.platform`, `process.platform`, `metaKey`, or `ctrlKey` directly in feature code.
+- Renderer keyboard events and Electron `before-input-event` inputs must be routed through the same shared matcher so macOS and Linux behavior stays consistent.
+- Shortcut capture UIs must store normalized shortcut strings from the shared capture helper, not hand-built modifier strings.
+- When adding or changing a shortcut, cover the shared command definition, display formatting, Electron input matching, renderer global handling, and any user-configurable capture flow with focused tests.
+- Task detail dock shortcuts must use the shared dock shortcut helpers: macOS uses `Cmd+{number}` and Linux uses `Alt+{number}`. Electron `before-input-event` must intercept these before terminal input receives them.
+- Task detail dock numbering excludes the back-to-board button and must be derived from the dock item array order, not hard-coded per item. Keep PR as the conditional slot after the first three dock items: with PR it is slot 4 and later items shift to 5+, without PR the next dock item gets slot 4.
 
-### 색상 기조
+## Task Navigation
 
-Google 브랜드 컬러 (#4285F4, #EA4335, #FBBC05, #34A853) 기반 + 블랙&화이트 라이트 테마.
+- Route all task-detail transitions through `navigateToTaskDetail()` in `src/desktop/renderer/utils/taskNavigation.ts`.
+- Before navigating the current window to a task detail route, focus an already-open window for the same task detail route when one exists.
+- Keep explicit new-window actions on `openInternalRouteInNewWindow()` or `navigateToTaskDetail(..., { openInNewWindow: true })` so Electron main can reuse its existing-window focus policy.
+- Do not hand-roll `router.push("/task/...")`, `redirect("/.../task/...")`, or `window.location.hash` for task detail transitions in feature components.
 
-### 네비게이션 원형 버튼 및 프로젝트 배지 색상 규칙
+## UI Color Tokens
 
-태스크 상세 페이지의 원형(>) 네비게이션 버튼과 프로젝트 배지는 항상 **Project Tag Color**(`bg-tag-project-bg`, #202632)를 사용한다. 프로젝트별 동적 색상으로 변경하지 않는다. 해당 요소: `TaskDetailTitleCard`의 "다른 작업 보기" 버튼, `ProjectBranchTasksModal`의 작업 이동 버튼, `TaskDetailInfoCard`의 프로젝트 배지 및 이동 버튼.
-
-### 새 토큰 추가 시
-
-1. `prd/design-system.json`에 토큰 정의
-2. `src/app/globals.css`의 `:root`에 CSS 변수 추가
-3. `@theme inline` 블록에 Tailwind 등록
-
-## Database Migration
-
-TypeORM migration 기반 스키마 관리. `synchronize`는 비활성화되어 있으며, 모든 스키마 변경은 migration으로 수행한다.
-
-### 파일 구조
-
-- `src/lib/typeorm-cli.config.ts` — CLI 전용 DataSource 설정 (migration generate/run/revert)
-- `src/lib/database.ts` — 앱 런타임 DataSource 설정 (`migrationsRun: true`로 자동 실행)
-- `src/migrations/*.ts` — 마이그레이션 파일 (타임스탬프 기반 정렬)
-
-### 스키마 변경 시
-
-1. `src/entities/`에서 엔티티 수정
-2. `pnpm migration:generate -- src/migrations/DescriptiveName` 실행 (DB 실행 상태 필요)
-3. 생성된 마이그레이션 파일의 SQL 검토
-4. `src/lib/database.ts`의 `migrations` 배열에 새 마이그레이션 클래스 import 추가
-5. `pnpm migration:run`으로 적용
-
-### 주요 명령어
-
-```bash
-# 엔티티 변경 기반 마이그레이션 생성
-pnpm migration:generate -- src/migrations/AddColumnName
-
-# 마이그레이션 실행
-pnpm migration:run
-
-# 마지막 마이그레이션 롤백
-pnpm migration:revert
-```
-
-### 주의사항
-
-- `synchronize: true` 사용 금지 (프로덕션 데이터 손실 위험)
-- 마이그레이션 파일은 생성 후 수정하지 않는다 (이미 실행된 환경과 불일치 발생)
-- 새 마이그레이션 생성 시 반드시 `database.ts`의 `migrations` 배열에 추가한다
-- 기존 DB 전환: `migrations` 테이블에 초기 마이그레이션 레코드를 수동 삽입한다
-
-```sql
-INSERT INTO migrations (timestamp, name) VALUES (1770854400000, 'InitialSchema1770854400000');
-```
-
-## Testing
-
-Vitest + @testing-library/react 기반. Given-When-Then 패턴을 사용한다.
-
-### 테스트 실행
-
-```bash
-NODE_ENV=test pnpm test          # 전체 테스트 실행
-NODE_ENV=test pnpm test:watch    # watch 모드
-```
-
-### 테스트 작성 규칙
-
-- 테스트 케이스명(`it`/`describe`)은 **영어**로 작성한다
-- `should ...` 패턴을 사용한다: `it("should call router.refresh() on remount")`
-- Given-When-Then 주석으로 섹션을 구분한다
-- 테스트 파일 위치: `src/**/__tests__/*.test.ts`
-
-### 예시
-
-```typescript
-it("should not call router.refresh() on first mount", async () => {
-  // Given
-  const { useAutoRefresh } = await import("@/hooks/useAutoRefresh");
-
-  // When
-  renderHook(() => useAutoRefresh());
-
-  // Then
-  expect(mockRefresh).not.toHaveBeenCalled();
-});
-```
-
-## 국제화 (i18n)
-
-next-intl 기반. 지원 언어: 한국어(ko), 영어(en), 중국어(zh). 기본 언어: ko.
-
-### 파일 구조
-
-- `messages/{locale}.json` — 번역 파일
-- `src/i18n/routing.ts` — locale 목록, 기본 locale 정의
-- `src/i18n/request.ts` — 서버 요청별 locale/메시지 로딩
-- `src/i18n/navigation.ts` — locale-aware Link, redirect, usePathname, useRouter
-
-### 번역 사용법
-
-- 클라이언트 컴포넌트: `const t = useTranslations("namespace")`
-- 서버 컴포넌트: `const t = await getTranslations("namespace")`
-- 네비게이션: `import { Link } from "@/i18n/navigation"` (next/link 대신)
-
-### 번역 키 추가 시
-
-1. `messages/ko.json`에 한국어 키/값 추가
-2. `messages/en.json`, `messages/zh.json`에 동일 키로 번역 추가
-3. 컴포넌트에서 `t("key")` 또는 `t("namespace.key")`로 사용
-
-## Git Convention
-
-All git-related text must be written in **English**:
-- Commit messages
-- PR titles and descriptions
-- Issue titles and descriptions
-- Branch names
-
-## 문서 업데이트 규칙
-
-사용자 대면 동작에 영향을 주는 변경 시 아래 문서를 함께 업데이트한다. 세 언어 버전은 항상 동시에 수정한다.
-
-| 변경 내용 | 업데이트 대상 |
-|-----------|--------------|
-| 기능 또는 UI 변경 | `README.md`, `docs/README.ko.md`, `docs/README.zh.md` |
-| 기여 프로세스 변경 | `docs/CONTRIBUTING.md`, `docs/CONTRIBUTING.ko.md`, `docs/CONTRIBUTING.zh.md` |
-| 환경변수 변경 | `.env.example` + 모든 README 파일 |
-| Hook API 변경 | 모든 README 파일 (Hook API 섹션) |
+- Use `#0064FF` as the primary point color for PR buttons, primary actions, selected states, links, focus borders, and other important interactive highlights.
+- Keep point-color usage behind semantic tokens such as `--color-brand-primary`, `--color-brand-hover`, `--color-brand-active`, `--color-brand-subtle`, and `--color-tag-pr-*` instead of hard-coding hex values in components.
+- Use `#202632` for neutral button-like surfaces that should read as actionable but not alerting, such as compact shortcut buttons, base/project badges, and non-notification controls.
+- Keep neutral button usage behind semantic tokens such as `--color-button-neutral-*`, `--color-tag-project-*`, and `--color-tag-base-*`.
+- Do not use the primary point color for warning, error, success, or notification severity. Keep those on the existing `status-*` semantic tokens.

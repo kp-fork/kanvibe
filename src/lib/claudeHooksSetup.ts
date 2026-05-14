@@ -1,25 +1,23 @@
-import { readFile, writeFile, mkdir, chmod, access } from "fs/promises";
+import { writeFile, mkdir, chmod } from "fs/promises";
 import path from "path";
 import { addAiToolPatternsToGitExclude } from "@/lib/gitExclude";
+import { readTextFile, readTextFiles } from "@/lib/hostFileAccess";
+import { extractShellHookServerUrl, validateHookServerConfiguration } from "@/lib/hookServerStatus";
+import { buildShellTaskIdResolver, getShellTaskIdBindingStatus } from "@/lib/hookTaskBinding";
 
 /** UserPromptSubmit hook bash 스크립트를 생성한다 */
-function generatePromptHookScript(kanvibeUrl: string, projectName: string): string {
+export function generatePromptHookScript(kanvibeUrl: string, taskId: string): string {
   return `#!/bin/bash
 
 # KanVibe Claude Code Hook: UserPromptSubmit
-# 사용자가 prompt를 입력하면 현재 브랜치의 작업을 PROGRESS로 변경한다.
+# 사용자가 prompt를 입력하면 현재 task를 PROGRESS로 변경한다.
 
 KANVIBE_URL="${kanvibeUrl}"
-PROJECT_NAME="${projectName}"
-
-BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ -z "$BRANCH_NAME" ] || [ "$BRANCH_NAME" = "HEAD" ]; then
-  exit 0
-fi
+${buildShellTaskIdResolver(taskId)}
 
 curl -s -X POST "\${KANVIBE_URL}/api/hooks/status" \\
   -H "Content-Type: application/json" \\
-  -d "{\\"branchName\\": \\"\${BRANCH_NAME}\\", \\"projectName\\": \\"\${PROJECT_NAME}\\", \\"status\\": \\"progress\\"}" \\
+  -d "{\\"taskId\\": \\\"\${TASK_ID}\\\", \\\"status\\\": \\\"progress\\\"}" \\
   > /dev/null 2>&1
 
 exit 0
@@ -27,23 +25,18 @@ exit 0
 }
 
 /** Stop hook bash 스크립트를 생성한다 */
-function generateStopHookScript(kanvibeUrl: string, projectName: string): string {
+export function generateStopHookScript(kanvibeUrl: string, taskId: string): string {
   return `#!/bin/bash
 
 # KanVibe Claude Code Hook: Stop
-# AI 응답이 완료되면 현재 브랜치의 작업을 REVIEW로 변경한다.
+# AI 응답이 완료되면 현재 task를 REVIEW로 변경한다.
 
 KANVIBE_URL="${kanvibeUrl}"
-PROJECT_NAME="${projectName}"
-
-BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ -z "$BRANCH_NAME" ] || [ "$BRANCH_NAME" = "HEAD" ]; then
-  exit 0
-fi
+${buildShellTaskIdResolver(taskId)}
 
 curl -s -X POST "\${KANVIBE_URL}/api/hooks/status" \\
   -H "Content-Type: application/json" \\
-  -d "{\\"branchName\\": \\"\${BRANCH_NAME}\\", \\"projectName\\": \\"\${PROJECT_NAME}\\", \\"status\\": \\"review\\"}" \\
+  -d "{\\"taskId\\": \\\"\${TASK_ID}\\\", \\\"status\\\": \\\"review\\\"}" \\
   > /dev/null 2>&1
 
 exit 0
@@ -51,23 +44,18 @@ exit 0
 }
 
 /** PreToolUse(AskUserQuestion) hook bash 스크립트를 생성한다 */
-function generateQuestionHookScript(kanvibeUrl: string, projectName: string): string {
+export function generateQuestionHookScript(kanvibeUrl: string, taskId: string): string {
   return `#!/bin/bash
 
 # KanVibe Claude Code Hook: PreToolUse (AskUserQuestion)
-# Claude가 사용자에게 질문할 때 현재 브랜치의 작업을 PENDING으로 변경한다.
+# Claude가 사용자에게 질문할 때 현재 task를 PENDING으로 변경한다.
 
 KANVIBE_URL="${kanvibeUrl}"
-PROJECT_NAME="${projectName}"
-
-BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ -z "$BRANCH_NAME" ] || [ "$BRANCH_NAME" = "HEAD" ]; then
-  exit 0
-fi
+${buildShellTaskIdResolver(taskId)}
 
 curl -s -X POST "\${KANVIBE_URL}/api/hooks/status" \\
   -H "Content-Type: application/json" \\
-  -d "{\\"branchName\\": \\"\${BRANCH_NAME}\\", \\"projectName\\": \\"\${PROJECT_NAME}\\", \\"status\\": \\"pending\\"}" \\
+  -d "{\\"taskId\\": \\\"\${TASK_ID}\\\", \\\"status\\\": \\\"pending\\\"}" \\
   > /dev/null 2>&1
 
 exit 0
@@ -87,23 +75,54 @@ interface MatcherHookEntry extends HookEntry {
   matcher: string;
 }
 
+const CLAUDE_PROMPT_COMMAND = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-prompt-hook.sh';
+const CLAUDE_STOP_COMMAND = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-stop-hook.sh';
+const CLAUDE_QUESTION_COMMAND = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-question-hook.sh';
+
 /** 기존 settings.json을 읽거나 빈 객체를 반환한다 */
-async function readSettingsJson(settingsPath: string): Promise<ClaudeSettings> {
+async function readSettingsJson(settingsPath: string, sshHost?: string | null): Promise<ClaudeSettings> {
+  return parseSettingsJson(await readTextFile(settingsPath, sshHost));
+}
+
+function parseSettingsJson(content: string): ClaudeSettings {
+  if (!content) {
+    return {};
+  }
+
   try {
-    const content = await readFile(settingsPath, "utf-8");
     return JSON.parse(content);
   } catch {
     return {};
   }
 }
 
-/** kanvibe hook이 이미 등록되어 있는지 확인한다 */
-function hasKanvibeHook(hookEntries: unknown[], scriptName: string): boolean {
+/** 현재 bucket에 원하는 command hook이 정확히 등록되어 있는지 확인한다 */
+function hasCommandHook(hookEntries: unknown[], command: string): boolean {
   if (!Array.isArray(hookEntries)) return false;
   return hookEntries.some((entry) => {
     const typed = entry as HookEntry;
-    return typed.hooks?.some((h) => h.command?.includes(scriptName));
+    return typed.hooks?.some((hook) => hook.type === "command" && hook.command === command);
   });
+}
+
+function hasMatcherCommandHook(hookEntries: unknown[], matcher: string, command: string): boolean {
+  if (!Array.isArray(hookEntries)) return false;
+  return hookEntries.some((entry) => {
+    const typed = entry as MatcherHookEntry;
+    return typed.matcher === matcher && typed.hooks?.some((hook) => hook.type === "command" && hook.command === command);
+  });
+}
+
+function referencesScriptName(entry: unknown, scriptName: string): boolean {
+  return JSON.stringify(entry).includes(scriptName);
+}
+
+function upsertHookEntries<T>(hookEntries: unknown[] | undefined, scriptName: string, nextEntry: T): T[] {
+  const preservedEntries = Array.isArray(hookEntries)
+    ? hookEntries.filter((entry) => !referencesScriptName(entry, scriptName)) as T[]
+    : [];
+  preservedEntries.push(nextEntry);
+  return preservedEntries;
 }
 
 /**
@@ -112,8 +131,8 @@ function hasKanvibeHook(hookEntries: unknown[], scriptName: string): boolean {
  */
 export async function setupClaudeHooks(
   repoPath: string,
-  projectName: string,
-  kanvibeUrl: string
+  taskId: string,
+  kanvibeUrl: string,
 ): Promise<void> {
   const claudeDir = path.join(repoPath, ".claude");
   const hooksDir = path.join(claudeDir, "hooks");
@@ -125,9 +144,9 @@ export async function setupClaudeHooks(
   const stopScriptPath = path.join(hooksDir, "kanvibe-stop-hook.sh");
   const questionScriptPath = path.join(hooksDir, "kanvibe-question-hook.sh");
 
-  await writeFile(promptScriptPath, generatePromptHookScript(kanvibeUrl, projectName), "utf-8");
-  await writeFile(stopScriptPath, generateStopHookScript(kanvibeUrl, projectName), "utf-8");
-  await writeFile(questionScriptPath, generateQuestionHookScript(kanvibeUrl, projectName), "utf-8");
+  await writeFile(promptScriptPath, generatePromptHookScript(kanvibeUrl, taskId), "utf-8");
+  await writeFile(stopScriptPath, generateStopHookScript(kanvibeUrl, taskId), "utf-8");
+  await writeFile(questionScriptPath, generateQuestionHookScript(kanvibeUrl, taskId), "utf-8");
   await chmod(promptScriptPath, 0o755);
   await chmod(stopScriptPath, 0o755);
   await chmod(questionScriptPath, 0o755);
@@ -139,67 +158,47 @@ export async function setupClaudeHooks(
 
   const hooks = settings.hooks as Record<string, unknown[]>;
 
-  if (!hooks.UserPromptSubmit) {
-    hooks.UserPromptSubmit = [];
-  }
-  if (!hasKanvibeHook(hooks.UserPromptSubmit, "kanvibe-prompt-hook.sh")) {
-    (hooks.UserPromptSubmit as HookEntry[]).push({
-      hooks: [
-        {
-          type: "command",
-          command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-prompt-hook.sh',
-          timeout: 10,
-        },
-      ],
-    });
-  }
+  hooks.UserPromptSubmit = upsertHookEntries<HookEntry>(hooks.UserPromptSubmit, "kanvibe-prompt-hook.sh", {
+    hooks: [
+      {
+        type: "command",
+        command: CLAUDE_PROMPT_COMMAND,
+        timeout: 10,
+      },
+    ],
+  });
 
-  if (!hooks.PreToolUse) {
-    hooks.PreToolUse = [];
-  }
-  if (!hasKanvibeHook(hooks.PreToolUse, "kanvibe-question-hook.sh")) {
-    (hooks.PreToolUse as MatcherHookEntry[]).push({
-      matcher: "AskUserQuestion",
-      hooks: [
-        {
-          type: "command",
-          command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-question-hook.sh',
-          timeout: 10,
-        },
-      ],
-    });
-  }
+  hooks.PreToolUse = upsertHookEntries<MatcherHookEntry>(hooks.PreToolUse, "kanvibe-question-hook.sh", {
+    matcher: "AskUserQuestion",
+    hooks: [
+      {
+        type: "command",
+        command: CLAUDE_QUESTION_COMMAND,
+        timeout: 10,
+      },
+    ],
+  });
 
-  if (!hooks.PostToolUse) {
-    hooks.PostToolUse = [];
-  }
-  if (!hasKanvibeHook(hooks.PostToolUse, "kanvibe-prompt-hook.sh")) {
-    (hooks.PostToolUse as MatcherHookEntry[]).push({
-      matcher: "AskUserQuestion",
-      hooks: [
-        {
-          type: "command",
-          command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-prompt-hook.sh',
-          timeout: 10,
-        },
-      ],
-    });
-  }
+  hooks.PostToolUse = upsertHookEntries<MatcherHookEntry>(hooks.PostToolUse, "kanvibe-prompt-hook.sh", {
+    matcher: "AskUserQuestion",
+    hooks: [
+      {
+        type: "command",
+        command: CLAUDE_PROMPT_COMMAND,
+        timeout: 10,
+      },
+    ],
+  });
 
-  if (!hooks.Stop) {
-    hooks.Stop = [];
-  }
-  if (!hasKanvibeHook(hooks.Stop, "kanvibe-stop-hook.sh")) {
-    (hooks.Stop as HookEntry[]).push({
-      hooks: [
-        {
-          type: "command",
-          command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/kanvibe-stop-hook.sh',
-          timeout: 10,
-        },
-      ],
-    });
-  }
+  hooks.Stop = upsertHookEntries<HookEntry>(hooks.Stop, "kanvibe-stop-hook.sh", {
+    hooks: [
+      {
+        type: "command",
+        command: CLAUDE_STOP_COMMAND,
+        timeout: 10,
+      },
+    ],
+  });
 
   await writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
 
@@ -216,46 +215,89 @@ export interface ClaudeHooksStatus {
   hasStopHook: boolean;
   hasQuestionHook: boolean;
   hasSettingsEntry: boolean;
+  hasTaskIdBinding?: boolean;
+  hasExpectedTaskId?: boolean;
+  hasStatusMappings?: boolean;
+  hasExpectedHookServerUrl?: boolean;
+  hasReachableHookServer?: boolean;
+  boundTaskId?: string | null;
+  configuredHookServerUrl?: string | null;
+  expectedHookServerUrl?: string | null;
 }
 
 /** 지정된 repo의 Claude Code hooks 설치 상태를 확인한다 */
-export async function getClaudeHooksStatus(repoPath: string): Promise<ClaudeHooksStatus> {
-  const claudeDir = path.join(repoPath, ".claude");
-  const hooksDir = path.join(claudeDir, "hooks");
-  const settingsPath = path.join(claudeDir, "settings.json");
+export async function getClaudeHooksStatus(repoPath: string, taskId?: string, sshHost?: string | null): Promise<ClaudeHooksStatus> {
+  const pathModule = sshHost ? path.posix : path;
+  const claudeDir = pathModule.join(repoPath, ".claude");
+  const hooksDir = pathModule.join(claudeDir, "hooks");
+  const settingsPath = pathModule.join(claudeDir, "settings.json");
+  const promptScriptPath = pathModule.join(hooksDir, "kanvibe-prompt-hook.sh");
+  const stopScriptPath = pathModule.join(hooksDir, "kanvibe-stop-hook.sh");
+  const questionScriptPath = pathModule.join(hooksDir, "kanvibe-question-hook.sh");
 
-  const promptScriptExists = await access(path.join(hooksDir, "kanvibe-prompt-hook.sh"))
-    .then(() => true)
-    .catch(() => false);
-  const stopScriptExists = await access(path.join(hooksDir, "kanvibe-stop-hook.sh"))
-    .then(() => true)
-    .catch(() => false);
-  const questionScriptExists = await access(path.join(hooksDir, "kanvibe-question-hook.sh"))
-    .then(() => true)
-    .catch(() => false);
+  const files = await readTextFiles([
+    promptScriptPath,
+    stopScriptPath,
+    questionScriptPath,
+    settingsPath,
+  ], sshHost);
+  const promptScript = files.get(promptScriptPath) ?? { exists: false, content: "" };
+  const stopScript = files.get(stopScriptPath) ?? { exists: false, content: "" };
+  const questionScript = files.get(questionScriptPath) ?? { exists: false, content: "" };
+  const settingsFile = files.get(settingsPath) ?? { exists: false, content: "" };
+  const promptContent = promptScript.content;
+  const stopContent = stopScript.content;
+  const questionContent = questionScript.content;
+
+  const scriptContents = [promptContent, stopContent, questionContent];
+  const { boundTaskId, hasTaskIdBinding, hasExpectedTaskId } = getShellTaskIdBindingStatus(scriptContents, taskId);
+  const hookServerValidation = await validateHookServerConfiguration(
+    scriptContents.map(extractShellHookServerUrl),
+    Boolean(taskId),
+    sshHost,
+  );
+  const hasStatusMappings =
+    promptContent.includes('\\\"status\\\": \\\"progress\\\"') &&
+    stopContent.includes('\\\"status\\\": \\\"review\\\"') &&
+    questionContent.includes('\\\"status\\\": \\\"pending\\\"');
 
   let hasSettingsEntry = false;
   try {
-    const settings = await readSettingsJson(settingsPath);
+    const settings = parseSettingsJson(settingsFile.content);
     const hooks = settings.hooks as Record<string, unknown[]> | undefined;
     if (hooks) {
-      const hasPrompt = hasKanvibeHook(hooks.UserPromptSubmit || [], "kanvibe-prompt-hook.sh");
-      const hasStop = hasKanvibeHook(hooks.Stop || [], "kanvibe-stop-hook.sh");
-      const hasQuestion = hasKanvibeHook(hooks.PreToolUse || [], "kanvibe-question-hook.sh");
-      const hasAnswerResume = hasKanvibeHook(hooks.PostToolUse || [], "kanvibe-prompt-hook.sh");
+      const hasPrompt = hasCommandHook(hooks.UserPromptSubmit || [], CLAUDE_PROMPT_COMMAND);
+      const hasStop = hasCommandHook(hooks.Stop || [], CLAUDE_STOP_COMMAND);
+      const hasQuestion = hasMatcherCommandHook(hooks.PreToolUse || [], "AskUserQuestion", CLAUDE_QUESTION_COMMAND);
+      const hasAnswerResume = hasMatcherCommandHook(hooks.PostToolUse || [], "AskUserQuestion", CLAUDE_PROMPT_COMMAND);
       hasSettingsEntry = hasPrompt && hasStop && hasQuestion && hasAnswerResume;
     }
   } catch {
     /* settings.json 없음 */
   }
 
-  const installed = promptScriptExists && stopScriptExists && questionScriptExists && hasSettingsEntry;
+  const installed = promptScript.exists
+    && stopScript.exists
+    && questionScript.exists
+    && hasSettingsEntry
+    && hasTaskIdBinding
+    && hasExpectedTaskId
+    && hasStatusMappings
+    && hookServerValidation.hasExpectedHookServerUrl;
 
   return {
     installed,
-    hasPromptHook: promptScriptExists,
-    hasStopHook: stopScriptExists,
-    hasQuestionHook: questionScriptExists,
+    hasPromptHook: promptScript.exists,
+    hasStopHook: stopScript.exists,
+    hasQuestionHook: questionScript.exists,
     hasSettingsEntry,
+    hasTaskIdBinding,
+    hasExpectedTaskId,
+    hasStatusMappings,
+    hasExpectedHookServerUrl: hookServerValidation.hasExpectedHookServerUrl,
+    hasReachableHookServer: hookServerValidation.hasReachableHookServer,
+    boundTaskId,
+    configuredHookServerUrl: hookServerValidation.configuredHookServerUrl,
+    expectedHookServerUrl: hookServerValidation.expectedHookServerUrl,
   };
 }

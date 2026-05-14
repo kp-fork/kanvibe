@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
-import { useRouter } from "@/i18n/navigation";
-import { createTask } from "@/app/actions/kanban";
-import { getProjectBranches } from "@/app/actions/project";
+import { usePathname, useRouter } from "@/desktop/renderer/navigation";
+import { createTask } from "@/desktop/renderer/actions/kanban";
+import { getProjectBranches } from "@/desktop/renderer/actions/project";
+import { navigateToTaskDetail } from "@/desktop/renderer/utils/taskNavigation";
 import { SessionType } from "@/entities/KanbanTask";
 import { TaskPriority } from "@/entities/TaskPriority";
 import type { Project } from "@/entities/Project";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import ProjectSelector from "./ProjectSelector";
 import PrioritySelector from "./PrioritySelector";
 import BranchSearchInput from "./BranchSearchInput";
@@ -22,85 +24,231 @@ interface CreateTaskModalProps {
   defaultSessionType?: string;
 }
 
+type CreateTaskModalContentProps = Pick<
+  CreateTaskModalProps,
+  "onClose" | "projects" | "defaultProjectId" | "defaultBaseBranch" | "defaultSessionType"
+>;
+
+const FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function findProjectDefaultBranch(projects: Project[], projectId: string) {
+  return projects.find((p) => p.id === projectId)?.defaultBranch ?? "";
+}
+
+function resolveInitialBaseBranch(
+  projects: Project[],
+  projectId: string,
+  defaultBaseBranch?: string,
+) {
+  if (!projectId) return "";
+  return defaultBaseBranch || findProjectDefaultBranch(projects, projectId);
+}
+
+function getFocusableElements(container: HTMLElement | null) {
+  if (!container) {
+    return [];
+  }
+
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((element) => element.tabIndex >= 0 && !element.hasAttribute("disabled"));
+}
+
 export default function CreateTaskModal({
   isOpen,
   onClose,
-  sshHosts,
   projects,
   defaultProjectId,
   defaultBaseBranch,
   defaultSessionType,
 }: CreateTaskModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <CreateTaskModalContent
+      onClose={onClose}
+      projects={projects}
+      defaultProjectId={defaultProjectId}
+      defaultBaseBranch={defaultBaseBranch}
+      defaultSessionType={defaultSessionType}
+    />
+  );
+}
+
+function CreateTaskModalContent({
+  onClose,
+  projects,
+  defaultProjectId,
+  defaultBaseBranch,
+  defaultSessionType,
+}: CreateTaskModalContentProps) {
   const t = useTranslations("task");
   const tc = useTranslations("common");
   const router = useRouter();
+  const pathname = usePathname();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [isPending, startTransition] = useTransition();
-  const [selectedProjectId, setSelectedProjectId] = useState(defaultProjectId || "");
+  const initialProjectId = defaultProjectId || "";
+  const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
   const [branches, setBranches] = useState<string[]>([]);
-  const [baseBranch, setBaseBranch] = useState("");
+  const [baseBranch, setBaseBranch] = useState(() =>
+    resolveInitialBaseBranch(projects, initialProjectId, defaultBaseBranch)
+  );
   const [priority, setPriority] = useState<TaskPriority | null>(null);
-
-  /** 모달이 열릴 때 필터에서 선택된 프로젝트를 자동 설정한다 */
-  useEffect(() => {
-    if (isOpen && defaultProjectId) {
-      setSelectedProjectId(defaultProjectId);
-    }
-  }, [isOpen, defaultProjectId]);
+  const [error, setError] = useState<string | null>(null);
 
   /** worktree가 아닌 프로젝트만 필터링한다 */
   const availableProjects = projects.filter((p) => !p.isWorktree);
 
-  useEffect(() => {
-    if (!selectedProjectId) {
+  const handleProjectSelect = useCallback(
+    (projectId: string) => {
+      setSelectedProjectId(projectId);
+      setBaseBranch(projectId ? findProjectDefaultBranch(projects, projectId) : "");
       setBranches([]);
-      setBaseBranch("");
-      return;
-    }
+    },
+    [projects],
+  );
 
-    const selectedProject = projects.find((p) => p.id === selectedProjectId);
-    if (selectedProject) {
-      setBaseBranch(defaultBaseBranch || selectedProject.defaultBranch);
-    }
+  useEffect(() => {
+    if (!selectedProjectId) return;
 
+    let isCancelled = false;
     getProjectBranches(selectedProjectId).then((result) => {
+      if (isCancelled) return;
+
       setBranches(result);
       /** defaultBaseBranch가 브랜치 목록에 없으면 옵션에 추가한다 */
       if (defaultBaseBranch && !result.includes(defaultBaseBranch)) {
         setBranches((prev) => [defaultBaseBranch, ...prev]);
       }
     });
-  }, [selectedProjectId, projects, defaultBaseBranch]);
 
-  if (!isOpen) return null;
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedProjectId, defaultBaseBranch]);
+
+  useEscapeKey(onClose);
+
+  useEffect(() => {
+    const focusableElements = getFocusableElements(dialogRef.current);
+    if (selectedProjectId) {
+      return;
+    }
+
+    focusableElements[0]?.focus();
+  }, [selectedProjectId]);
+
+  const branchOptions = baseBranch && !branches.includes(baseBranch)
+    ? [baseBranch, ...branches]
+    : branches;
+  const selectedProjectName = projects.find((project) => project.id === selectedProjectId)?.name;
 
   function handleSubmit(formData: FormData) {
     const branchName = formData.get("branchName") as string;
     if (!branchName || !selectedProjectId) return;
+    setError(null);
 
     startTransition(async () => {
-      const created = await createTask({
-        title: branchName,
-        description: (formData.get("description") as string) || undefined,
-        branchName,
-        baseBranch: baseBranch || undefined,
-        sessionType: (formData.get("sessionType") as SessionType) || undefined,
-        sshHost: (formData.get("sshHost") as string) || undefined,
-        projectId: selectedProjectId,
-        priority: priority || undefined,
-      });
-      onClose();
-      router.push(`/task/${created.id}`);
+      try {
+        const sessionType = (formData.get("sessionType") as SessionType) || undefined;
+
+        const created = await createTask({
+          title: branchName,
+          description: (formData.get("description") as string) || undefined,
+          branchName,
+          baseBranch: baseBranch || undefined,
+          sessionType,
+          sshHost: (formData.get("sshHost") as string) || undefined,
+          projectId: selectedProjectId,
+          priority: priority || undefined,
+        });
+        onClose();
+        await navigateToTaskDetail(created.id, {
+          currentLocale: pathname.split("/").filter(Boolean)[0],
+          navigate: router.push,
+        });
+      } catch (error) {
+        setError(error instanceof Error ? error.message : t("createFailed"));
+      }
     });
   }
 
+  function handleFormKeyDown(event: React.KeyboardEvent<HTMLFormElement>) {
+    if (
+      event.key !== "Enter" ||
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      event.shiftKey ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    ) {
+      return;
+    }
+
+    if (event.target instanceof HTMLButtonElement) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.requestSubmit();
+  }
+
+  function handleDialogKeyDownCapture(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusableElements = getFocusableElements(dialogRef.current);
+    if (focusableElements.length === 0) {
+      return;
+    }
+
+    const activeElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const currentIndex = activeElement ? focusableElements.indexOf(activeElement) : -1;
+
+    if (event.shiftKey) {
+      if (currentIndex <= 0) {
+        event.preventDefault();
+        focusableElements[focusableElements.length - 1]?.focus();
+      }
+      return;
+    }
+
+    if (currentIndex === -1 || currentIndex === focusableElements.length - 1) {
+      event.preventDefault();
+      focusableElements[0]?.focus();
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-[400] flex items-center justify-center bg-bg-overlay">
+    <div
+      ref={dialogRef}
+      data-terminal-focus-blocker="true"
+      className="fixed inset-0 z-[400] flex items-center justify-center bg-bg-overlay"
+      onKeyDownCapture={handleDialogKeyDownCapture}
+    >
       <div className="w-full max-w-md bg-bg-surface rounded-xl border border-border-default shadow-lg p-6">
         <h2 className="text-lg font-semibold text-text-primary mb-4">
           {t("createTitle")}
         </h2>
 
-        <form action={handleSubmit} className="space-y-4">
+        <form action={handleSubmit} className="space-y-4" onKeyDown={handleFormKeyDown}>
           <div>
             <label className="block text-sm text-text-secondary mb-1">
               {t("project")} *
@@ -108,7 +256,7 @@ export default function CreateTaskModal({
             <ProjectSelector
               projects={availableProjects}
               selectedProjectId={selectedProjectId}
-              onSelect={setSelectedProjectId}
+              onSelect={handleProjectSelect}
               placeholder={t("projectSelect")}
               searchPlaceholder={t("projectSearch")}
             />
@@ -120,9 +268,11 @@ export default function CreateTaskModal({
                 {t("baseBranch")}
               </label>
               <BranchSearchInput
-                branches={branches.length > 0 ? branches : baseBranch ? [baseBranch] : []}
+                branches={branchOptions}
                 value={baseBranch}
                 onChange={setBaseBranch}
+                projectName={selectedProjectName}
+                autoFocus
               />
             </div>
           )}
@@ -171,6 +321,8 @@ export default function CreateTaskModal({
               <option value="zellij">zellij</option>
             </select>
           </div>
+
+          {error && <p className="text-xs text-status-error">{error}</p>}
 
           <div className="flex justify-end gap-3 pt-2">
             <button
